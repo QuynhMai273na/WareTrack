@@ -1,0 +1,18 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vs/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+
+# Claude Code local files
+.claude/settings.local.json
