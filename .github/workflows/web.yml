@@ -55,6 +55,8 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://waretrack:waretrack@localhost:5432/waretrack?schema=public
+      # Seed thêm bãi xe WH-06 cho test vehicle storage; DemoDirector không bật trong CI (dữ liệu test cố định)
+      SEED_VEHICLE_YARD: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { KpiDto } from '@waretrack/shared-schemas';
 import { ON_SITE_VISIT_STATUSES } from '@waretrack/shared-schemas';
 import { PublishedEventBus } from '../../platform/outbox/event-bus';
@@ -19,6 +19,7 @@ const DEBOUNCE_MS = 2_000;
 export class KpiService implements OnModuleInit {
   private cache = new Map<string, { at: number; kpis: KpiDto[] }>();
   private timers = new Map<string, NodeJS.Timeout>();
+  private readonly log = new Logger(KpiService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -42,18 +43,23 @@ export class KpiService implements OnModuleInit {
       siteId,
       setTimeout(async () => {
         this.timers.delete(siteId);
-        const kpis = await this.get(siteId);
-        await this.prisma.$transaction((tx) =>
-          this.outbox.publish(tx, {
-            siteId,
-            type: 'site.kpi_updated',
-            aggregateType: 'Site',
-            aggregateId: siteId,
-            // KPI là read model: version = epoch giây (tăng đơn điệu) để client bỏ bản cũ hơn
-            aggregateVersion: Math.floor(Date.now() / 1000),
-            data: { kpis, asOf: new Date().toISOString() },
-          }),
-        );
+        // Lỗi trong timer không có ai bắt → phải tự nuốt, nếu không sẽ làm sập tiến trình (vd. site vừa bị xóa khi seed lại)
+        try {
+          const kpis = await this.get(siteId);
+          await this.prisma.$transaction((tx) =>
+            this.outbox.publish(tx, {
+              siteId,
+              type: 'site.kpi_updated',
+              aggregateType: 'Site',
+              aggregateId: siteId,
+              // KPI là read model: version = epoch giây (tăng đơn điệu) để client bỏ bản cũ hơn
+              aggregateVersion: Math.floor(Date.now() / 1000),
+              data: { kpis, asOf: new Date().toISOString() },
+            }),
+          );
+        } catch (e) {
+          this.log.warn(`KPI broadcast for site ${siteId} skipped: ${(e as Error).message.trim().split('\n').pop()}`);
+        }
       }, DEBOUNCE_MS),
     );
   }

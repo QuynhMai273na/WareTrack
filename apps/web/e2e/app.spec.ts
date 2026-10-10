@@ -52,7 +52,9 @@ test.describe('WareTrack demo', () => {
   test('viewer cannot see management pages', async ({ page }) => {
     await login(page, 'viewer');
     await page.goto('/sites/WH-01');
-    await expect(page.locator('nav a', { hasText: /Inbound|Nhập/ })).toHaveCount(0);
-    await expect(page.locator('nav a', { hasText: /Exceptions|Ngoại lệ/ })).toHaveCount(1);
+    // Điều hướng nằm trong menu người dùng (bố cục video)
+    await page.getByTestId('user-menu').click();
+    await expect(page.getByRole('menuitem', { name: /Exceptions|Ngoại lệ/ })).toHaveCount(1);
+    await expect(page.getByRole('menuitem', { name: /Inbound|Nhập/ })).toHaveCount(0);
   });
 });

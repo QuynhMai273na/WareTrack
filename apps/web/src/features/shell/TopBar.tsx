@@ -239,7 +239,7 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
       <NotificationBell timeZone={timeZone} />
       <div className="h-8 w-px bg-line" />
       <Dropdown.Root>
-        <Dropdown.Trigger className="flex items-center gap-2.5 rounded-xl px-1 py-1 outline-none hover:bg-white/60">
+        <Dropdown.Trigger data-testid="user-menu" className="flex items-center gap-2.5 rounded-xl px-1 py-1 outline-none hover:bg-white/60">
           <Avatar />
           <span className="hidden flex-col text-left leading-tight lg:flex">
             <span className="whitespace-nowrap text-[14px] font-semibold">{me?.user.fullName}</span>

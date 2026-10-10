@@ -36,7 +36,15 @@ const pallets = await call(mgr, 'GET', `${S}/pallets`);
 const inStock = pallets.body.find((p) => p.lifecycle === 'IN_STOCK' && p.locationCode?.startsWith('R-'));
 const locs = await call(mgr, 'GET', `${S}/locations?type=STORAGE`);
 const empty = locs.body.find((l) => l.unitsUsed === 0);
-const full = locs.body.find((l) => l.unitsUsed >= l.capacityUnits && l.code !== inStock.locationCode);
+let full = locs.body.find((l) => l.unitsUsed >= l.capacityUnits && l.code !== inStock.locationCode);
+if (!full) {
+  // Seed theo video không có ô đầy sẵn → lấp đầy ô còn trống đúng 1 chỗ bằng một pallet khác
+  const tight = locs.body.find((l) => l.unitsUsed > 0 && l.capacityUnits - l.unitsUsed === 1 && l.code !== inStock.locationCode);
+  const filler = pallets.body.find((p) => p.lifecycle === 'IN_STOCK' && p.locationCode?.startsWith('A-'));
+  const fill = await call(mgr, 'POST', `${S}/pallets/${filler.id}/move`, { toLocationId: tight.id, reason: 'fill for capacity test', expectedVersion: filler.version });
+  check('fill a location to capacity', fill.status === 200, `${fill.status} ${fill.body.code ?? ''}`);
+  full = tight;
+}
 const detail = await call(mgr, 'GET', `${S}/pallets/${inStock.id}`);
 
 const tooFull = await call(op, 'POST', `${S}/pallets/${inStock.id}/move`, { toLocationId: full.id, reason: 'test capacity', expectedVersion: detail.body.version });
@@ -47,7 +55,7 @@ const hist = await call(mgr, 'GET', `${S}/pallets/${inStock.id}/history`);
 check('pallet history has MOVE ledger + movement', hist.body.some((h) => h.kind === 'MOVEMENT' && h.description === 'Re-slotting') && hist.body.some((h) => h.description.startsWith('MOVE')));
 
 // Adjustment: ngưỡng DEC-14 + maker-checker
-const boxPallet = (await call(mgr, 'GET', `${S}/inventory/balances?q=SKU-BOX-M`)).body.find((b) => b.handlingUnit && Number(b.qtyOnHand) >= 150 && b.stockStatus === 'AVAILABLE');
+const boxPallet = (await call(mgr, 'GET', `${S}/inventory/balances?q=PKG-BOX-M`)).body.find((b) => b.handlingUnit && Number(b.qtyOnHand) >= 150 && b.stockStatus === 'AVAILABLE');
 const bal = { balanceId: boxPallet.id };
 const small = await call(sup, 'POST', `${S}/inventory/adjustments`, { balanceId: bal.balanceId, qtyDelta: '-1', reasonCode: 'DAMAGE', note: 'Broken unit' });
 check('small adjustment does not need manager', small.status === 201 && small.body.requiresManager === false, `${small.status} ${small.body.code ?? ''}`);
