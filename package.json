@@ -1,0 +1,20 @@
+{
+  "name": "waretrack",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @waretrack/shared-schemas build && pnpm --parallel --filter @waretrack/api --filter @waretrack/web --filter @waretrack/shared-schemas dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "db:up": "docker compose -f infrastructure/docker/compose.dev.yml up -d",
+    "db:down": "docker compose -f infrastructure/docker/compose.dev.yml down",
+    "db:migrate": "pnpm --filter @waretrack/api prisma:migrate",
+    "db:seed": "pnpm --filter @waretrack/api prisma:seed",
+    "db:reset": "pnpm --filter @waretrack/api prisma:reset"
+  }
+}

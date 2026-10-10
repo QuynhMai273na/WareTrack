@@ -1,0 +1,1417 @@
+// WareTrack — Prisma schema (mục 14). Ràng buộc mà Prisma không biểu đạt được
+// (partial unique index, check constraint, trigger) nằm trong SQL migration (mục 14.8).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+  LOCKED
+}
+
+enum SiteType {
+  DEPOT
+  DISTRIBUTION_CENTER
+  CROSS_DOCK
+  COLD_STORE
+  AUTOMATED_DC
+  VEHICLE_YARD
+  MIXED
+}
+
+enum OperationalStatus {
+  OPERATIONAL
+  LIMITED
+  CLOSED
+}
+
+enum ZoneType {
+  YARD
+  WAREHOUSE
+  STAGING
+  QUARANTINE
+  VEHICLE_STORAGE
+  GATE_AREA
+  CHARGING
+}
+
+enum LocationType {
+  STORAGE
+  PARKING_SLOT
+  DOCK
+  GATE_LANE
+  STAGING
+  QUARANTINE
+  YARD_SLOT
+  CHARGER
+}
+
+enum DockDirection {
+  INBOUND
+  OUTBOUND
+  BOTH
+}
+
+enum LayoutStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum LayoutTargetType {
+  ZONE
+  LOCATION
+  BUILDING
+  DECOR
+}
+
+enum TruckType {
+  BOX
+  REEFER
+  FLATBED
+  CAR_CARRIER
+  CONTAINER
+}
+
+enum VisitDirection {
+  INBOUND
+  OUTBOUND
+  BOTH
+}
+
+enum TruckVisitStatus {
+  SCHEDULED
+  AT_GATE
+  WAITING
+  DOCK_ASSIGNED
+  AT_DOCK
+  HANDLING
+  READY_TO_LEAVE
+  EXITED
+  REJECTED
+  NO_SHOW
+  CANCELLED
+}
+
+enum ExitReason {
+  COMPLETED
+  ABORTED
+  REJECTED_GOODS
+  EMERGENCY
+}
+
+enum GateEventType {
+  IN_ARRIVAL
+  IN_VERIFIED
+  OUT
+  VEHICLE_IN
+  VEHICLE_OUT
+  REJECTED
+}
+
+enum OccupantType {
+  TRUCK_VISIT
+  VEHICLE_STAY
+  HANDLING_UNIT
+  EQUIPMENT
+}
+
+enum OccupancyKind {
+  RESERVED
+  OCCUPIED
+}
+
+enum PositionSource {
+  CONFIRMED_MANUAL
+  CONFIRMED_SCAN
+  SENSOR_OBSERVED
+  INFERRED
+}
+
+enum EquipmentType {
+  FORKLIFT
+  REACH_TRUCK
+  PALLET_JACK
+  TUG
+}
+
+enum EquipmentStatus {
+  OFFLINE
+  AVAILABLE
+  ASSIGNED
+  BUSY
+  CHARGING
+  MAINTENANCE
+}
+
+enum ActorType {
+  USER
+  DEVICE
+  SYSTEM
+}
+
+// ───────────────────────── Identity ─────────────────────────
+
+model User {
+  id                String         @id @default(uuid(7)) @db.Uuid
+  username          String         @unique
+  email             String         @unique
+  fullName          String         @map("full_name")
+  passwordHash      String         @map("password_hash")
+  status            UserStatus     @default(ACTIVE)
+  failedLoginCount  Int            @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?      @map("locked_until") @db.Timestamptz(6)
+  permissionVersion Int            @default(0) @map("permission_version")
+  lastSiteId        String?        @map("last_site_id") @db.Uuid
+  version           Int            @default(0)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  siteRoles         UserSiteRole[]
+  refreshTokens     RefreshToken[]
+
+  @@map("user")
+}
+
+model Role {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  code        String           @unique
+  name        String
+  isSystem    Boolean          @default(true) @map("is_system")
+  permissions RolePermission[]
+  userRoles   UserSiteRole[]
+
+  @@map("role")
+}
+
+model Permission {
+  id     String           @id @default(uuid(7)) @db.Uuid
+  code   String           @unique
+  module String
+  roles  RolePermission[]
+
+  @@map("permission")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permission")
+}
+
+model UserSiteRole {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  roleId      String    @map("role_id") @db.Uuid
+  siteId      String?   @map("site_id") @db.Uuid // NULL = toàn doanh nghiệp
+  grantedById String?   @map("granted_by_id") @db.Uuid
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User      @relation(fields: [userId], references: [id])
+  role        Role      @relation(fields: [roleId], references: [id])
+  site        Site?     @relation(fields: [siteId], references: [id])
+
+  // partial unique (user_id, role_id, site_id) WHERE revoked_at IS NULL -> SQL migration
+  @@index([userId])
+  @@map("user_site_role")
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash")
+  familyId     String    @map("family_id") @db.Uuid
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedById String?   @map("replaced_by_id") @db.Uuid
+  userAgent    String?   @map("user_agent")
+  ip           String?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user         User      @relation(fields: [userId], references: [id])
+
+  @@index([familyId])
+  @@map("refresh_token")
+}
+
+// ───────────────────────── Sites & Layout ─────────────────────────
+
+model Site {
+  id                String            @id @default(uuid(7)) @db.Uuid
+  code              String
+  name              String
+  siteType          SiteType          @map("site_type")
+  addressLine       String?           @map("address_line")
+  timezone          String
+  /** Vị trí của site trên bản đồ mạng lưới chung (mét, hệ tọa độ thế giới của scene 3D) */
+  mapX              Float             @default(0) @map("map_x")
+  mapZ              Float             @default(0) @map("map_z")
+  operationalStatus OperationalStatus @default(OPERATIONAL) @map("operational_status")
+  version           Int               @default(0)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  zones             Zone[]
+  locations         Location[]
+  settings          SiteSetting[]
+  layouts           LayoutVersion[]
+  userRoles         UserSiteRole[]
+
+  // partial unique (code) WHERE deleted_at IS NULL -> SQL migration
+  @@map("site")
+}
+
+model SiteSetting {
+  siteId    String   @map("site_id") @db.Uuid
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  site      Site     @relation(fields: [siteId], references: [id])
+
+  @@id([siteId, key])
+  @@map("site_setting")
+}
+
+model Zone {
+  id        String     @id @default(uuid(7)) @db.Uuid
+  siteId    String     @map("site_id") @db.Uuid
+  code      String
+  name      String
+  zoneType  ZoneType   @map("zone_type")
+  version   Int        @default(0)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?  @map("deleted_at") @db.Timestamptz(6)
+  site      Site       @relation(fields: [siteId], references: [id])
+  locations Location[]
+
+  @@index([siteId])
+  @@map("zone")
+}
+
+model Location {
+  id              String              @id @default(uuid(7)) @db.Uuid
+  siteId          String              @map("site_id") @db.Uuid
+  zoneId          String              @map("zone_id") @db.Uuid
+  code            String
+  /** Tên hiển thị (Bay 1, Yard slot S01…) */
+  name            String?
+  qrValue         String              @unique @map("qr_value")
+  locationType    LocationType        @map("location_type")
+  capacityUnits   Decimal             @default(1) @map("capacity_units") @db.Decimal(10, 2)
+  maxWeightKg     Decimal?            @map("max_weight_kg") @db.Decimal(10, 2)
+  singleOccupancy Boolean             @default(true) @map("single_occupancy")
+  lengthM         Decimal?            @map("length_m") @db.Decimal(6, 2)
+  widthM          Decimal?            @map("width_m") @db.Decimal(6, 2)
+  isActive        Boolean             @default(true) @map("is_active")
+  blockedAt       DateTime?           @map("blocked_at") @db.Timestamptz(6)
+  blockedReason   String?             @map("blocked_reason")
+  frozenByCountId String?             @map("frozen_by_count_id") @db.Uuid
+  version         Int                 @default(0)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  site            Site                @relation(fields: [siteId], references: [id])
+  zone            Zone                @relation(fields: [zoneId], references: [id])
+  dock            Dock?
+  occupancies     LocationOccupancy[]
+
+  @@index([siteId, zoneId, locationType])
+  @@map("location")
+}
+
+model Dock {
+  locationId      String        @id @map("location_id") @db.Uuid
+  siteId          String        @map("site_id") @db.Uuid
+  direction       DockDirection
+  doorNumber      String?       @map("door_number")
+  maxTruckLengthM Decimal?      @map("max_truck_length_m") @db.Decimal(6, 2)
+  location        Location      @relation(fields: [locationId], references: [id])
+
+  @@map("dock")
+}
+
+model LayoutVersion {
+  id            String         @id @default(uuid(7)) @db.Uuid
+  siteId        String         @map("site_id") @db.Uuid
+  versionNo     Int            @map("version_no")
+  status        LayoutStatus   @default(DRAFT)
+  modelFileId   String?        @map("model_file_id") @db.Uuid
+  boundsMinX    Float          @default(0) @map("bounds_min_x")
+  boundsMinZ    Float          @default(0) @map("bounds_min_z")
+  boundsMaxX    Float          @default(100) @map("bounds_max_x")
+  boundsMaxZ    Float          @default(100) @map("bounds_max_z")
+  publishedAt   DateTime?      @map("published_at") @db.Timestamptz(6)
+  publishedById String?        @map("published_by_id") @db.Uuid
+  version       Int            @default(0)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  site          Site           @relation(fields: [siteId], references: [id])
+  objects       LayoutObject[]
+
+  @@unique([siteId, versionNo])
+  @@map("layout_version")
+}
+
+model LayoutObject {
+  id              String           @id @default(uuid(7)) @db.Uuid
+  layoutVersionId String           @map("layout_version_id") @db.Uuid
+  targetType      LayoutTargetType @map("target_type")
+  targetId        String?          @map("target_id") @db.Uuid
+  meshRef         String?          @map("mesh_ref")
+  posX            Float            @map("pos_x")
+  posY            Float            @default(0) @map("pos_y")
+  posZ            Float            @map("pos_z")
+  rotY            Float            @default(0) @map("rot_y")
+  sizeX           Float            @default(1) @map("size_x")
+  sizeY           Float            @default(1) @map("size_y")
+  sizeZ           Float            @default(1) @map("size_z")
+  props           Json?
+  layoutVersion   LayoutVersion    @relation(fields: [layoutVersionId], references: [id], onDelete: Cascade)
+
+  @@index([layoutVersionId])
+  @@map("layout_object")
+}
+
+model Partner {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  code         String
+  name         String
+  partnerTypes String[]  @map("partner_types")
+  contact      Json?
+  version      Int       @default(0)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  trucks       Truck[]
+  drivers      Driver[]
+
+  @@map("partner")
+}
+
+// ───────────────────────── Yard ─────────────────────────
+
+model Truck {
+  id          String       @id @default(uuid(7)) @db.Uuid
+  code        String
+  plateNumber String       @map("plate_number")
+  carrierId   String?      @map("carrier_id") @db.Uuid
+  truckType   TruckType    @map("truck_type")
+  version     Int          @default(0)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  carrier     Partner?     @relation(fields: [carrierId], references: [id])
+  visits      TruckVisit[]
+
+  @@map("truck")
+}
+
+model Driver {
+  id            String       @id @default(uuid(7)) @db.Uuid
+  fullName      String       @map("full_name")
+  licenseNumber String?      @map("license_number")
+  phone         String?
+  carrierId     String?      @map("carrier_id") @db.Uuid
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  carrier       Partner?     @relation(fields: [carrierId], references: [id])
+  visits        TruckVisit[]
+
+  @@map("driver")
+}
+
+model TruckVisit {
+  id                String           @id @default(uuid(7)) @db.Uuid
+  siteId            String           @map("site_id") @db.Uuid
+  code              String           @unique
+  truckId           String           @map("truck_id") @db.Uuid
+  driverId          String?          @map("driver_id") @db.Uuid
+  direction         VisitDirection
+  status            TruckVisitStatus
+  unscheduled       Boolean          @default(false)
+  appointmentStart  DateTime?        @map("appointment_start") @db.Timestamptz(6)
+  appointmentEnd    DateTime?        @map("appointment_end") @db.Timestamptz(6)
+  etaAt             DateTime?        @map("eta_at") @db.Timestamptz(6)
+  arrivedAt         DateTime?        @map("arrived_at") @db.Timestamptz(6)
+  verifiedAt        DateTime?        @map("verified_at") @db.Timestamptz(6)
+  dockedAt          DateTime?        @map("docked_at") @db.Timestamptz(6)
+  handlingStartedAt DateTime?        @map("handling_started_at") @db.Timestamptz(6)
+  readyAt           DateTime?        @map("ready_at") @db.Timestamptz(6)
+  exitedAt          DateTime?        @map("exited_at") @db.Timestamptz(6)
+  dockLocationId    String?          @map("dock_location_id") @db.Uuid
+  actualPlate       String?          @map("actual_plate")
+  sealIn            String?          @map("seal_in")
+  sealOut           String?          @map("seal_out")
+  exitReason        ExitReason?      @map("exit_reason")
+  rejectReason      String?          @map("reject_reason")
+  lateReason        String?          @map("late_reason")
+  version           Int              @default(0)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdById       String?          @map("created_by_id") @db.Uuid
+  truck             Truck            @relation(fields: [truckId], references: [id])
+  driver            Driver?          @relation(fields: [driverId], references: [id])
+  gateEvents        GateEvent[]
+
+  // partial unique (truck_id) WHERE status active -> SQL migration (BR-13)
+  @@index([siteId, status])
+  @@index([siteId, appointmentStart])
+  @@map("truck_visit")
+}
+
+model GateEvent {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  siteId         String        @map("site_id") @db.Uuid
+  eventType      GateEventType @map("event_type")
+  truckVisitId   String?       @map("truck_visit_id") @db.Uuid
+  vehicleStayId  String?       @map("vehicle_stay_id") @db.Uuid
+  gateLocationId String?       @map("gate_location_id") @db.Uuid
+  plateRead      String?       @map("plate_read")
+  note           String?
+  occurredAt     DateTime      @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actorId        String?       @map("actor_id") @db.Uuid
+  truckVisit     TruckVisit?   @relation(fields: [truckVisitId], references: [id])
+
+  @@index([siteId, occurredAt])
+  @@map("gate_event")
+}
+
+model LocationOccupancy {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  siteId          String          @map("site_id") @db.Uuid
+  locationId      String          @map("location_id") @db.Uuid
+  occupantType    OccupantType    @map("occupant_type")
+  occupantId      String          @map("occupant_id") @db.Uuid
+  kind            OccupancyKind
+  singleOccupancy Boolean         @map("single_occupancy")
+  unitsUsed       Decimal         @default(1) @map("units_used") @db.Decimal(10, 2)
+  startedAt       DateTime        @default(now()) @map("started_at") @db.Timestamptz(6)
+  occupiedAt      DateTime?       @map("occupied_at") @db.Timestamptz(6)
+  expiresAt       DateTime?       @map("expires_at") @db.Timestamptz(6)
+  releasedAt      DateTime?       @map("released_at") @db.Timestamptz(6)
+  positionSource  PositionSource? @map("position_source")
+  createdById     String?         @map("created_by_id") @db.Uuid
+  location        Location        @relation(fields: [locationId], references: [id])
+
+  // partial unique indexes BR-01, BR-12 -> SQL migration
+  @@index([occupantType, occupantId, startedAt(sort: Desc)])
+  @@map("location_occupancy")
+}
+
+// ───────────────────────── Equipment ─────────────────────────
+
+model Equipment {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  siteId            String          @map("site_id") @db.Uuid
+  code              String
+  equipmentType     EquipmentType   @map("equipment_type")
+  model             String?
+  status            EquipmentStatus @default(OFFLINE)
+  chargerLocationId String?         @map("charger_location_id") @db.Uuid
+  currentOperatorId String?         @map("current_operator_id") @db.Uuid
+  telemetry         Json?
+  telemetryAt       DateTime?       @map("telemetry_at") @db.Timestamptz(6)
+  telemetrySource   PositionSource? @map("telemetry_source")
+  taskSummary       String?         @map("task_summary")
+  version           Int             @default(0)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime?       @map("deleted_at") @db.Timestamptz(6)
+
+  @@index([siteId, status])
+  @@map("equipment")
+}
+
+// ───────────────────────── Platform ─────────────────────────
+
+model AuditLog {
+  id            BigInt    @id @default(autoincrement())
+  siteId        String?   @map("site_id") @db.Uuid
+  actorType     ActorType @map("actor_type")
+  actorId       String?   @map("actor_id") @db.Uuid
+  action        String
+  entityType    String    @map("entity_type")
+  entityId      String    @map("entity_id")
+  diff          Json?
+  reason        String?
+  correlationId String?   @map("correlation_id")
+  ip            String?
+  userAgent     String?   @map("user_agent")
+  occurredAt    DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@index([siteId, occurredAt(sort: Desc)])
+  @@index([entityType, entityId, occurredAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+model OutboxEvent {
+  id               BigInt    @id @default(autoincrement())
+  eventId          String    @unique @map("event_id") @db.Uuid
+  siteId           String    @map("site_id") @db.Uuid
+  eventType        String    @map("event_type")
+  eventVersion     Int       @default(1) @map("event_version")
+  aggregateType    String    @map("aggregate_type")
+  aggregateId      String    @map("aggregate_id")
+  aggregateVersion Int       @map("aggregate_version")
+  payload          Json
+  correlationId    String?   @map("correlation_id")
+  siteSeq          BigInt?   @map("site_seq")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  publishedAt      DateTime? @map("published_at") @db.Timestamptz(6)
+
+  @@map("outbox_event")
+}
+
+model SiteEventCursor {
+  siteId  String @id @map("site_id") @db.Uuid
+  lastSeq BigInt @default(0) @map("last_seq")
+
+  @@map("site_event_cursor")
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  key            String
+  userId         String   @map("user_id") @db.Uuid
+  method         String
+  path           String
+  requestHash    String   @map("request_hash")
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@unique([userId, key])
+  @@map("idempotency_record")
+}
+
+/// Bộ đếm sinh mã nghiệp vụ dễ đọc theo phạm vi (ví dụ "VIS-261010", "TSK-WH-01") — DEC-07.
+model CodeCounter {
+  scope String @id
+  value BigInt @default(0)
+
+  @@map("code_counter")
+}
+
+// ───────────────────────── Inventory (Phase 3) ─────────────────────────
+
+enum StockStatus {
+  AVAILABLE
+  QC_HOLD
+  QUARANTINE
+  DAMAGED
+}
+
+enum AllocationStrategy {
+  FIFO
+  FEFO
+}
+
+enum HuLifecycle {
+  RECEIVING
+  IN_STOCK
+  PICKED
+  STAGED
+  LOADED
+  DISPATCHED
+  EMPTY
+}
+
+enum SerialStatus {
+  IN_STOCK
+  PICKED
+  SHIPPED
+  QUARANTINE
+  SCRAPPED
+}
+
+enum InventoryTxType {
+  RECEIPT
+  RECEIPT_REVERSAL
+  MOVE
+  STATUS_CHANGE
+  ISSUE
+  ISSUE_REVERSAL
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+enum ReservationStatus {
+  ACTIVE
+  PICKED
+  CONSUMED
+  RELEASED
+}
+
+enum StockCountStatus {
+  PLANNED
+  IN_PROGRESS
+  RECONCILING
+  COMPLETED
+  CANCELLED
+}
+
+enum AdjustmentStatus {
+  PENDING_APPROVAL
+  APPLIED
+  REJECTED
+}
+
+enum AdjustmentReason {
+  COUNT_VARIANCE
+  DAMAGE
+  LOSS
+  FOUND
+  DATA_CORRECTION
+}
+
+enum MovementSubject {
+  HANDLING_UNIT
+  VEHICLE_STAY
+  TRUCK_VISIT
+  EQUIPMENT
+}
+
+model Sku {
+  id                 String             @id @default(uuid(7)) @db.Uuid
+  code               String
+  name               String
+  /** Nhóm hàng hiển thị (PPE, Packaging, Electronics…) */
+  category           String?
+  baseUom            String             @default("EA") @map("base_uom")
+  uomDecimals        Int                @default(0) @map("uom_decimals")
+  lotTracked         Boolean            @default(false) @map("lot_tracked")
+  serialTracked      Boolean            @default(false) @map("serial_tracked")
+  expiryTracked      Boolean            @default(false) @map("expiry_tracked")
+  qcRequired         Boolean            @default(false) @map("qc_required")
+  allocationStrategy AllocationStrategy @default(FIFO) @map("allocation_strategy")
+  unitWeightKg       Decimal?           @map("unit_weight_kg") @db.Decimal(10, 3)
+  lowStockThreshold  Decimal?           @map("low_stock_threshold") @db.Decimal(18, 3)
+  version            Int                @default(0)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?          @map("deleted_at") @db.Timestamptz(6)
+  lots               Lot[]
+
+  @@map("sku")
+}
+
+model Lot {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  skuId          String    @map("sku_id") @db.Uuid
+  lotNumber      String    @map("lot_number")
+  manufacturedOn DateTime? @map("manufactured_on") @db.Date
+  expiresOn      DateTime? @map("expires_on") @db.Date
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  sku            Sku       @relation(fields: [skuId], references: [id])
+
+  @@unique([skuId, lotNumber])
+  @@map("lot")
+}
+
+model SerialUnit {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  skuId          String       @map("sku_id") @db.Uuid
+  serialNumber   String       @map("serial_number")
+  siteId         String?      @map("site_id") @db.Uuid
+  locationId     String?      @map("location_id") @db.Uuid
+  handlingUnitId String?      @map("handling_unit_id") @db.Uuid
+  status         SerialStatus @default(IN_STOCK)
+  version        Int          @default(0)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([skuId, serialNumber])
+  @@map("serial_unit")
+}
+
+model HandlingUnit {
+  id                  String          @id @default(uuid(7)) @db.Uuid
+  siteId              String          @map("site_id") @db.Uuid
+  code                String          @unique
+  sscc                String?         @unique
+  lifecycle           HuLifecycle     @default(RECEIVING)
+  locationId          String?         @map("location_id") @db.Uuid
+  positionSource      PositionSource? @map("position_source")
+  positionConfirmedAt DateTime?       @map("position_confirmed_at") @db.Timestamptz(6)
+  grossWeightKg       Decimal?        @map("gross_weight_kg") @db.Decimal(10, 2)
+  mixedContent        Boolean         @default(false) @map("mixed_content")
+  version             Int             @default(0)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([siteId, lifecycle])
+  @@index([locationId])
+  @@map("handling_unit")
+}
+
+model InventoryBalance {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  siteId         String        @map("site_id") @db.Uuid
+  locationId     String        @map("location_id") @db.Uuid
+  skuId          String        @map("sku_id") @db.Uuid
+  lotId          String?       @map("lot_id") @db.Uuid
+  handlingUnitId String?       @map("handling_unit_id") @db.Uuid
+  stockStatus    StockStatus   @map("stock_status")
+  qtyOnHand      Decimal       @default(0) @map("qty_on_hand") @db.Decimal(18, 3)
+  qtyReserved    Decimal       @default(0) @map("qty_reserved") @db.Decimal(18, 3)
+  receivedAt     DateTime      @default(now()) @map("received_at") @db.Timestamptz(6)
+  version        Int           @default(0)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  reservations   Reservation[]
+
+  // unique NULLS NOT DISTINCT + CHECK constraints -> SQL migration
+  @@index([siteId, skuId, stockStatus])
+  @@index([siteId, locationId])
+  @@index([handlingUnitId])
+  @@map("inventory_balance")
+}
+
+model InventoryTransaction {
+  id             BigInt          @id @default(autoincrement())
+  siteId         String          @map("site_id") @db.Uuid
+  txType         InventoryTxType @map("tx_type")
+  idempotencyKey String          @unique @map("idempotency_key")
+  skuId          String          @map("sku_id") @db.Uuid
+  lotId          String?         @map("lot_id") @db.Uuid
+  handlingUnitId String?         @map("handling_unit_id") @db.Uuid
+  serialUnitId   String?         @map("serial_unit_id") @db.Uuid
+  fromLocationId String?         @map("from_location_id") @db.Uuid
+  toLocationId   String?         @map("to_location_id") @db.Uuid
+  fromStatus     StockStatus?    @map("from_status")
+  toStatus       StockStatus?    @map("to_status")
+  quantity       Decimal         @db.Decimal(18, 3)
+  referenceType  String          @map("reference_type")
+  referenceId    String          @map("reference_id")
+  reversesTxId   BigInt?         @map("reverses_tx_id")
+  actorId        String?         @map("actor_id") @db.Uuid
+  occurredAt     DateTime        @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([siteId, occurredAt(sort: Desc)])
+  @@index([handlingUnitId, id])
+  @@index([referenceType, referenceId])
+  @@map("inventory_transaction")
+}
+
+model Reservation {
+  id                  String            @id @default(uuid(7)) @db.Uuid
+  siteId              String            @map("site_id") @db.Uuid
+  balanceId           String            @map("balance_id") @db.Uuid
+  outboundOrderLineId String            @map("outbound_order_line_id") @db.Uuid
+  shipmentId          String?           @map("shipment_id") @db.Uuid
+  quantity            Decimal           @db.Decimal(18, 3)
+  status              ReservationStatus @default(ACTIVE)
+  version             Int               @default(0)
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  balance             InventoryBalance  @relation(fields: [balanceId], references: [id])
+
+  @@index([outboundOrderLineId])
+  @@index([balanceId, status])
+  @@map("reservation")
+}
+
+model StockCount {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  siteId      String           @map("site_id") @db.Uuid
+  code        String
+  status      StockCountStatus @default(PLANNED)
+  blind       Boolean          @default(true)
+  freeze      Boolean          @default(false)
+  scope       Json
+  createdById String?          @map("created_by_id") @db.Uuid
+  version     Int              @default(0)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lines       StockCountLine[]
+
+  @@map("stock_count")
+}
+
+model StockCountLine {
+  id             String     @id @default(uuid(7)) @db.Uuid
+  stockCountId   String     @map("stock_count_id") @db.Uuid
+  siteId         String     @map("site_id") @db.Uuid
+  locationId     String     @map("location_id") @db.Uuid
+  skuId          String     @map("sku_id") @db.Uuid
+  lotId          String?    @map("lot_id") @db.Uuid
+  handlingUnitId String?    @map("handling_unit_id") @db.Uuid
+  balanceId      String?    @map("balance_id") @db.Uuid
+  systemQty      Decimal    @map("system_qty") @db.Decimal(18, 3)
+  countedQty     Decimal?   @map("counted_qty") @db.Decimal(18, 3)
+  countRound     Int        @default(0) @map("count_round")
+  countedById    String?    @map("counted_by_id") @db.Uuid
+  countedAt      DateTime?  @map("counted_at") @db.Timestamptz(6)
+  stockCount     StockCount @relation(fields: [stockCountId], references: [id])
+
+  @@index([stockCountId])
+  @@map("stock_count_line")
+}
+
+model StockAdjustment {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  siteId           String           @map("site_id") @db.Uuid
+  code             String
+  balanceId        String           @map("balance_id") @db.Uuid
+  stockCountLineId String?          @map("stock_count_line_id") @db.Uuid
+  qtyDelta         Decimal          @map("qty_delta") @db.Decimal(18, 3)
+  reasonCode       AdjustmentReason @map("reason_code")
+  note             String?
+  status           AdjustmentStatus @default(PENDING_APPROVAL)
+  requiresManager  Boolean          @default(false) @map("requires_manager")
+  requestedById    String           @map("requested_by_id") @db.Uuid
+  approvedById     String?          @map("approved_by_id") @db.Uuid
+  decidedAt        DateTime?        @map("decided_at") @db.Timestamptz(6)
+  decisionNote     String?          @map("decision_note")
+  appliedTxId      BigInt?          @map("applied_tx_id")
+  version          Int              @default(0)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([siteId, status])
+  @@map("stock_adjustment")
+}
+
+// ───────────────────────── Inbound / Outbound / Shipments (Phase 4) ─────────────────────────
+
+enum InboundOrderStatus {
+  DRAFT
+  CONFIRMED
+  RECEIVING
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum ReceiptStatus {
+  IN_PROGRESS
+  PARTIALLY_RECEIVED
+  COMPLETED
+  CANCELLED
+}
+
+enum DiscrepancyType {
+  SHORT
+  OVER
+  DAMAGED
+  UNEXPECTED_SKU
+  LOT_MISMATCH
+}
+
+enum DiscrepancyStatus {
+  OPEN
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+enum QcResult {
+  PASS
+  FAIL
+  PARTIAL
+}
+
+enum OutboundOrderStatus {
+  DRAFT
+  CONFIRMED
+  ALLOCATING
+  PICKING
+  SHIPPED
+  PARTIALLY_SHIPPED
+  CANCELLED
+}
+
+enum OrderLineStatus {
+  OPEN
+  PARTIALLY_ALLOCATED
+  ALLOCATED
+  PARTIALLY_PICKED
+  PICKED
+  SHIPPED
+  CANCELLED
+}
+
+enum ShipmentDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum ShipmentStatus {
+  DRAFT
+  CONFIRMED
+  PICKING
+  STAGED
+  LOADING
+  DISPATCHED
+  DELIVERED
+  EXPECTED
+  ARRIVED
+  UNLOADING
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum ShipmentItemType {
+  HANDLING_UNIT
+  VEHICLE
+}
+
+enum TaskType {
+  PUTAWAY
+  PICK
+  LOAD
+  UNLOAD
+  MOVE_PALLET
+  MOVE_VEHICLE
+  QC
+  COUNT
+  RETURN_TO_STOCK
+}
+
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  BLOCKED
+  FAILED
+  CANCELLED
+}
+
+enum ExceptionStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+enum ExceptionSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model InboundOrder {
+  id          String             @id @default(uuid(7)) @db.Uuid
+  siteId      String             @map("site_id") @db.Uuid
+  code        String
+  supplierId  String?            @map("supplier_id") @db.Uuid
+  status      InboundOrderStatus @default(DRAFT)
+  expectedOn  DateTime?          @map("expected_on") @db.Date
+  shipmentId  String?            @map("shipment_id") @db.Uuid
+  version     Int                @default(0)
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lines       InboundOrderLine[]
+
+  @@unique([siteId, code], map: "ux_inbound_order_code")
+  @@index([siteId, status])
+  @@map("inbound_order")
+}
+
+model InboundOrderLine {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  inboundOrderId    String       @map("inbound_order_id") @db.Uuid
+  siteId            String       @map("site_id") @db.Uuid
+  skuId             String       @map("sku_id") @db.Uuid
+  expectedLotNumber String?      @map("expected_lot_number")
+  expectedQty       Decimal      @map("expected_qty") @db.Decimal(18, 3)
+  expectedHuCount   Int?         @map("expected_hu_count")
+  receivedQty       Decimal      @default(0) @map("received_qty") @db.Decimal(18, 3)
+  order             InboundOrder @relation(fields: [inboundOrderId], references: [id])
+
+  @@map("inbound_order_line")
+}
+
+model Receipt {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  siteId         String        @map("site_id") @db.Uuid
+  code           String
+  inboundOrderId String        @map("inbound_order_id") @db.Uuid
+  shipmentId     String        @map("shipment_id") @db.Uuid
+  dockLocationId String        @map("dock_location_id") @db.Uuid
+  status         ReceiptStatus @default(IN_PROGRESS)
+  startedAt      DateTime      @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt    DateTime?     @map("completed_at") @db.Timestamptz(6)
+  version        Int           @default(0)
+  lines          ReceiptLine[]
+
+  @@index([siteId, status])
+  @@map("receipt")
+}
+
+model ReceiptLine {
+  id                 String      @id @default(uuid(7)) @db.Uuid
+  receiptId          String      @map("receipt_id") @db.Uuid
+  siteId             String      @map("site_id") @db.Uuid
+  inboundOrderLineId String?     @map("inbound_order_line_id") @db.Uuid
+  skuId              String      @map("sku_id") @db.Uuid
+  lotId              String?     @map("lot_id") @db.Uuid
+  handlingUnitId     String      @map("handling_unit_id") @db.Uuid
+  quantity           Decimal     @db.Decimal(18, 3)
+  stockStatus        StockStatus @map("stock_status")
+  idempotencyKey     String      @unique @map("idempotency_key")
+  voided             Boolean     @default(false)
+  voidReason         String?     @map("void_reason")
+  inventoryTxId      BigInt?     @map("inventory_tx_id")
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  receipt            Receipt     @relation(fields: [receiptId], references: [id])
+
+  @@index([receiptId])
+  @@map("receipt_line")
+}
+
+model ReceiptDiscrepancy {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  receiptId       String            @map("receipt_id") @db.Uuid
+  siteId          String            @map("site_id") @db.Uuid
+  discrepancyType DiscrepancyType   @map("discrepancy_type")
+  skuId           String?           @map("sku_id") @db.Uuid
+  qtyDelta        Decimal           @map("qty_delta") @db.Decimal(18, 3)
+  status          DiscrepancyStatus @default(OPEN)
+  note            String?
+  exceptionCaseId String?           @map("exception_case_id") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([receiptId])
+  @@map("receipt_discrepancy")
+}
+
+model QcInspection {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  siteId         String       @map("site_id") @db.Uuid
+  handlingUnitId String       @map("handling_unit_id") @db.Uuid
+  result         QcResult
+  qtyPassed      Decimal      @map("qty_passed") @db.Decimal(18, 3)
+  qtyFailed      Decimal      @map("qty_failed") @db.Decimal(18, 3)
+  failStatus     StockStatus? @map("fail_status")
+  note           String?
+  inspectorId    String?      @map("inspector_id") @db.Uuid
+  inspectedAt    DateTime     @default(now()) @map("inspected_at") @db.Timestamptz(6)
+
+  @@map("qc_inspection")
+}
+
+model OutboundOrder {
+  id                  String              @id @default(uuid(7)) @db.Uuid
+  siteId              String              @map("site_id") @db.Uuid
+  code                String
+  customerId          String?             @map("customer_id") @db.Uuid
+  status              OutboundOrderStatus @default(DRAFT)
+  requestedDeliveryAt DateTime?           @map("requested_delivery_at") @db.Timestamptz(6)
+  shipmentId          String?             @map("shipment_id") @db.Uuid
+  version             Int                 @default(0)
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lines               OutboundOrderLine[]
+
+  @@unique([siteId, code], map: "ux_outbound_order_code")
+  @@index([siteId, status])
+  @@map("outbound_order")
+}
+
+model OutboundOrderLine {
+  id              String          @id @default(uuid(7)) @db.Uuid
+  outboundOrderId String          @map("outbound_order_id") @db.Uuid
+  siteId          String          @map("site_id") @db.Uuid
+  skuId           String          @map("sku_id") @db.Uuid
+  lotId           String?         @map("lot_id") @db.Uuid
+  orderedQty      Decimal         @map("ordered_qty") @db.Decimal(18, 3)
+  allocatedQty    Decimal         @default(0) @map("allocated_qty") @db.Decimal(18, 3)
+  pickedQty       Decimal         @default(0) @map("picked_qty") @db.Decimal(18, 3)
+  shippedQty      Decimal         @default(0) @map("shipped_qty") @db.Decimal(18, 3)
+  status          OrderLineStatus @default(OPEN)
+  order           OutboundOrder   @relation(fields: [outboundOrderId], references: [id])
+
+  @@map("outbound_order_line")
+}
+
+model Shipment {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  siteId            String             @map("site_id") @db.Uuid
+  code              String             @unique
+  direction         ShipmentDirection
+  status            ShipmentStatus
+  carrierId         String?            @map("carrier_id") @db.Uuid
+  partnerId         String?            @map("partner_id") @db.Uuid
+  truckVisitId      String?            @map("truck_visit_id") @db.Uuid
+  stagingLocationId String?            @map("staging_location_id") @db.Uuid
+  destinationText   String?            @map("destination_text")
+  plannedDispatchAt DateTime?          @map("planned_dispatch_at") @db.Timestamptz(6)
+  promisedAt        DateTime?          @map("promised_at") @db.Timestamptz(6)
+  etaAt             DateTime?          @map("eta_at") @db.Timestamptz(6)
+  arrivedAt         DateTime?          @map("arrived_at") @db.Timestamptz(6)
+  dispatchedAt      DateTime?          @map("dispatched_at") @db.Timestamptz(6)
+  deliveredAt       DateTime?          @map("delivered_at") @db.Timestamptz(6)
+  sealNumber        String?            @map("seal_number")
+  expectedHuCount   Int                @default(0) @map("expected_hu_count")
+  version           Int                @default(0)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  items             ShipmentItem[]
+  milestones        ShipmentMilestone[]
+
+  @@index([siteId, status])
+  @@index([truckVisitId])
+  @@map("shipment")
+}
+
+model ShipmentItem {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  shipmentId     String           @map("shipment_id") @db.Uuid
+  siteId         String           @map("site_id") @db.Uuid
+  itemType       ShipmentItemType @map("item_type")
+  handlingUnitId String?          @map("handling_unit_id") @db.Uuid
+  vehicleStayId  String?          @map("vehicle_stay_id") @db.Uuid
+  loadedAt       DateTime?        @map("loaded_at") @db.Timestamptz(6)
+  unloadedAt     DateTime?        @map("unloaded_at") @db.Timestamptz(6)
+  shipment       Shipment         @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId])
+  @@map("shipment_item")
+}
+
+model ShipmentMilestone {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  shipmentId String   @map("shipment_id") @db.Uuid
+  milestone  String
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  source     String   @default("SYSTEM")
+  actorId    String?  @map("actor_id") @db.Uuid
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId])
+  @@map("shipment_milestone")
+}
+
+model OperationTask {
+  id                String     @id @default(uuid(7)) @db.Uuid
+  siteId            String     @map("site_id") @db.Uuid
+  code              String
+  taskType          TaskType   @map("task_type")
+  status            TaskStatus @default(PENDING)
+  priority          Int        @default(3)
+  subjectType       String     @map("subject_type")
+  subjectId         String     @map("subject_id") @db.Uuid
+  fromLocationId    String?    @map("from_location_id") @db.Uuid
+  toLocationId      String?    @map("to_location_id") @db.Uuid
+  sourceType        String     @map("source_type")
+  sourceId          String     @map("source_id") @db.Uuid
+  assigneeId        String?    @map("assignee_id") @db.Uuid
+  equipmentId       String?    @map("equipment_id") @db.Uuid
+  payload           Json?
+  startedAt         DateTime?  @map("started_at") @db.Timestamptz(6)
+  completedAt       DateTime?  @map("completed_at") @db.Timestamptz(6)
+  blockReason       String?    @map("block_reason")
+  version           Int        @default(0)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // partial unique (equipment_id / assignee_id) WHERE status = IN_PROGRESS -> SQL migration (BR-27)
+  @@unique([siteId, code], map: "ux_task_code")
+  @@index([siteId, status, priority])
+  @@index([siteId, taskType, completedAt])
+  @@index([sourceType, sourceId])
+  @@map("operation_task")
+}
+
+model TaskEvent {
+  id         String      @id @default(uuid(7)) @db.Uuid
+  taskId     String      @map("task_id") @db.Uuid
+  fromStatus TaskStatus? @map("from_status")
+  toStatus   TaskStatus  @map("to_status")
+  actorId    String?     @map("actor_id") @db.Uuid
+  note       String?
+  occurredAt DateTime    @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@index([taskId])
+  @@map("task_event")
+}
+
+model ExceptionCase {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  siteId         String            @map("site_id") @db.Uuid
+  code           String
+  caseType       String            @map("case_type")
+  severity       ExceptionSeverity @default(MEDIUM)
+  status         ExceptionStatus   @default(OPEN)
+  subjectType    String?           @map("subject_type")
+  subjectId      String?           @map("subject_id") @db.Uuid
+  description    String
+  assigneeId     String?           @map("assignee_id") @db.Uuid
+  resolutionCode String?           @map("resolution_code")
+  resolutionNote String?           @map("resolution_note")
+  createdById    String?           @map("created_by_id") @db.Uuid
+  version        Int               @default(0)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([siteId, status])
+  @@map("exception_case")
+}
+
+// ───────────────────────── Vehicle Storage (Phase 5) ─────────────────────────
+
+enum VehicleStayStatus {
+  EXPECTED
+  RECEIVED
+  INSPECTED
+  ALLOCATED
+  STORED
+  RELEASE_REQUESTED
+  RELEASED
+  EXITED
+  CANCELLED
+}
+
+enum VehicleCondition {
+  OK
+  MINOR_DAMAGE
+  MAJOR_DAMAGE
+  NEEDS_SERVICE
+}
+
+enum ReleaseRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+model StoredVehicle {
+  id             String        @id @default(uuid(7)) @db.Uuid
+  vin            String        @unique
+  make           String?
+  model          String?
+  modelYear      Int?          @map("model_year")
+  color          String?
+  plateNumber    String?       @map("plate_number")
+  ownerPartnerId String?       @map("owner_partner_id") @db.Uuid
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  stays          VehicleStay[]
+
+  @@map("stored_vehicle")
+}
+
+model VehicleStay {
+  id               String              @id @default(uuid(7)) @db.Uuid
+  siteId           String              @map("site_id") @db.Uuid
+  vehicleId        String              @map("vehicle_id") @db.Uuid
+  status           VehicleStayStatus
+  conditionStatus  VehicleCondition    @default(OK) @map("condition_status")
+  holdFlag         Boolean             @default(false) @map("hold_flag")
+  holdReason       String?             @map("hold_reason")
+  odometerKm       Int?                @map("odometer_km")
+  fuelOrBatteryPct Int?                @map("fuel_or_battery_pct")
+  keyTag           String?             @map("key_tag")
+  expectedAt       DateTime?           @map("expected_at") @db.Timestamptz(6)
+  receivedAt       DateTime?           @map("received_at") @db.Timestamptz(6)
+  storedAt         DateTime?           @map("stored_at") @db.Timestamptz(6)
+  releasedAt       DateTime?           @map("released_at") @db.Timestamptz(6)
+  exitedAt         DateTime?           @map("exited_at") @db.Timestamptz(6)
+  version          Int                 @default(0)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  vehicle          StoredVehicle       @relation(fields: [vehicleId], references: [id])
+  inspections      VehicleInspection[]
+  releaseRequests  ReleaseRequest[]
+
+  // partial unique (vehicle_id) WHERE status active -> SQL migration (BR-14)
+  @@index([siteId, status])
+  @@map("vehicle_stay")
+}
+
+model VehicleInspection {
+  id              String           @id @default(uuid(7)) @db.Uuid
+  siteId          String           @map("site_id") @db.Uuid
+  vehicleStayId   String           @map("vehicle_stay_id") @db.Uuid
+  inspectionType  String           @map("inspection_type")
+  checklist       Json
+  resultCondition VehicleCondition @map("result_condition")
+  inspectorId     String?          @map("inspector_id") @db.Uuid
+  inspectedAt     DateTime         @default(now()) @map("inspected_at") @db.Timestamptz(6)
+  stay            VehicleStay      @relation(fields: [vehicleStayId], references: [id])
+
+  @@index([vehicleStayId])
+  @@map("vehicle_inspection")
+}
+
+model ReleaseRequest {
+  id            String               @id @default(uuid(7)) @db.Uuid
+  siteId        String               @map("site_id") @db.Uuid
+  vehicleStayId String               @map("vehicle_stay_id") @db.Uuid
+  status        ReleaseRequestStatus @default(PENDING)
+  reason        String
+  recipientName String               @map("recipient_name")
+  plannedAt     DateTime?            @map("planned_at") @db.Timestamptz(6)
+  requestedById String               @map("requested_by_id") @db.Uuid
+  decidedById   String?              @map("decided_by_id") @db.Uuid
+  decidedAt     DateTime?            @map("decided_at") @db.Timestamptz(6)
+  decisionNote  String?              @map("decision_note")
+  version       Int                  @default(0)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  stay          VehicleStay          @relation(fields: [vehicleStayId], references: [id])
+
+  @@index([vehicleStayId])
+  @@map("release_request")
+}
+
+// ───────────────────────── Operations — movement history ─────────────────────────
+
+model MovementRecord {
+  id             BigInt          @id @default(autoincrement())
+  siteId         String          @map("site_id") @db.Uuid
+  subjectType    MovementSubject @map("subject_type")
+  subjectId      String          @map("subject_id") @db.Uuid
+  fromLocationId String?         @map("from_location_id") @db.Uuid
+  toLocationId   String?         @map("to_location_id") @db.Uuid
+  positionSource PositionSource  @map("position_source")
+  confidence     Decimal?        @db.Decimal(3, 2)
+  reason         String
+  actorId        String?         @map("actor_id") @db.Uuid
+  taskId         String?         @map("task_id") @db.Uuid
+  occurredAt     DateTime        @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  recordedAt     DateTime        @default(now()) @map("recorded_at") @db.Timestamptz(6)
+
+  @@index([subjectType, subjectId, occurredAt(sort: Desc)])
+  @@index([siteId, occurredAt(sort: Desc)])
+  @@map("movement_record")
+}
+
+// ───────────────────────── Notifications (FR-18) ─────────────────────────
+
+/** In-app notification sinh từ event đã commit; idempotent theo (eventId, userId) (mục 13.2 Notifications). */
+model Notification {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  siteId    String?   @map("site_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  eventId   String    @map("event_id")
+  category  String
+  severity  String    @default("INFO")
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([eventId, userId], map: "ux_notification_event_user")
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notification")
+}

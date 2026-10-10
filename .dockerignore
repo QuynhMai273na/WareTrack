@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/.keys
+**/coverage
+**/*.log
+**/*.tsbuildinfo
+.git
+.github
+.vscode
+.claude
+docs
+infrastructure
+apps/web

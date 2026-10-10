@@ -1,0 +1,103 @@
+name: Web – CI, e2e & deploy (Vercel)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/shared-schemas/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/shared-schemas/**"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter "@waretrack/web..."
+      - run: pnpm --filter @waretrack/shared-schemas build
+      - run: pnpm --filter @waretrack/web typecheck
+      - run: pnpm --filter @waretrack/web test
+      - run: pnpm --filter @waretrack/web build
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          VITE_WS_URL: ${{ vars.VITE_WS_URL }}
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: waretrack
+          POSTGRES_PASSWORD: waretrack
+          POSTGRES_DB: waretrack
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U waretrack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://waretrack:waretrack@localhost:5432/waretrack?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @waretrack/shared-schemas build
+      - run: pnpm --filter @waretrack/api exec prisma generate && pnpm --filter @waretrack/api build
+      - run: pnpm --filter @waretrack/api exec prisma migrate deploy && pnpm db:seed
+      - name: Start API
+        working-directory: apps/api
+        run: |
+          node dist/main.js > api.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/v1/health/ready && break; sleep 1; done
+      - run: pnpm --filter @waretrack/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @waretrack/web e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+
+  deploy:
+    needs: [build, e2e]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: web-production
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Project Vercel đặt Root Directory = apps/web; build theo apps/web/vercel.json (env VITE_* đặt trên Vercel)
+      - name: Deploy to Vercel (production)
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::VERCEL_TOKEN chưa cấu hình — bỏ qua deploy"; exit 0; fi
+          npx vercel@39 pull --yes --environment=production --token="$VERCEL_TOKEN"
+          npx vercel@39 build --prod --token="$VERCEL_TOKEN"
+          npx vercel@39 deploy --prebuilt --prod --token="$VERCEL_TOKEN"

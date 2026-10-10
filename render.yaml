@@ -1,0 +1,43 @@
+# Render Blueprint — WareTrack API + PostgreSQL (DEC-58). Web chạy trên Vercel (DEC-52).
+# Dùng: Render Dashboard → New → Blueprint → chọn repo này. Secret (sync: false) nhập trên dashboard.
+databases:
+  - name: waretrack-db
+    databaseName: waretrack
+    user: waretrack
+    plan: free # Free Postgres của Render hết hạn sau 30 ngày — đổi plan khi dùng thật
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: waretrack-api
+    runtime: docker
+    plan: free # Free instance ngủ sau ~15 phút không có request; lần gọi đầu mất ~1 phút để dậy
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health/ready
+    autoDeploy: false # deploy do GitHub Actions gọi deploy hook sau khi CI xanh (.github/workflows/api.yml)
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: waretrack-db
+          property: connectionString
+      # Origin của web trên Vercel, ví dụ https://waretrack.vercel.app (nhiều origin cách nhau bằng dấu phẩy)
+      - key: WEB_ORIGIN
+        sync: false
+      # Khóa ES256 dạng PEM (xuống dòng viết \n) — sinh bằng: node apps/api/scripts/gen-jwt-keys.mjs
+      - key: JWT_PRIVATE_KEY
+        sync: false
+      - key: JWT_PUBLIC_KEY
+        sync: false
+      # Web (vercel.app) và API (onrender.com) khác site → cookie refresh phải SameSite=None; Secure (mục 12.7)
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SEED_ON_EMPTY
+        value: "true"
+      # Dựng và chạy kịch bản xe/xe nâng giống video demo (DemoDirector, DEC-51)
+      - key: DEMO_DIRECTOR
+        value: "true"
