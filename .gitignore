@@ -16,3 +16,12 @@ Thumbs.db
 
 # Claude Code local files
 .claude/settings.local.json
+
+# Build / dependencies
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+apps/api/.keys/
+apps/web/test-results/
+apps/web/playwright-report/

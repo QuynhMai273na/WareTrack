@@ -1,0 +1,80 @@
+name: API – CI & deploy (Render)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "packages/shared-schemas/**"
+      - "pnpm-lock.yaml"
+      - "render.yaml"
+      - ".github/workflows/api.yml"
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "packages/shared-schemas/**"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: waretrack
+          POSTGRES_PASSWORD: waretrack
+          POSTGRES_DB: waretrack
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U waretrack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://waretrack:waretrack@localhost:5432/waretrack?schema=public
+      # Seed thêm bãi xe WH-06 cho test vehicle storage; DemoDirector không bật trong CI (dữ liệu test cố định)
+      SEED_VEHICLE_YARD: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter "@waretrack/api..."
+      - run: pnpm --filter @waretrack/shared-schemas build
+      - run: pnpm --filter @waretrack/api exec prisma generate
+      - run: pnpm --filter @waretrack/api typecheck
+      - run: pnpm --filter @waretrack/api test
+      - run: pnpm --filter @waretrack/api build
+      - run: pnpm --filter @waretrack/api exec prisma migrate deploy
+      - name: Smoke tests (API thật + Postgres thật, seed lại trước mỗi bộ)
+        working-directory: apps/api
+        run: |
+          node dist/main.js > api.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/v1/health/ready && break; sleep 1; done
+          pnpm test:smoke
+      - if: failure()
+        run: cat apps/api/api.log || true
+      - name: Docker image builds
+        run: docker build -f apps/api/Dockerfile -t waretrack-api:ci .
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: api-production
+    steps:
+      # Render build lại từ Dockerfile của commit này (render.yaml: autoDeploy false)
+      - name: Trigger Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then echo "::warning::RENDER_DEPLOY_HOOK_URL chưa cấu hình — bỏ qua deploy"; exit 0; fi
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
