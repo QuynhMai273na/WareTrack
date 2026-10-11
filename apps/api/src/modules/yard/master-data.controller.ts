@@ -42,12 +42,12 @@ export class MasterDataController {
   ) {}
 
   @Get('partners')
-  async partners(@Query('type') type?: string, @Query('q') q?: string) {
+  async partners(@Query('type') type?: string, @Query('q') searchText?: string) {
     const rows = await this.prisma.partner.findMany({
       where: {
         deletedAt: null,
         ...(type ? { partnerTypes: { has: type } } : {}),
-        ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
+        ...(searchText ? { name: { contains: searchText, mode: 'insensitive' as const } } : {}),
       },
       orderBy: { name: 'asc' },
       take: 200,
@@ -107,12 +107,12 @@ export class MasterDataController {
       take: 200,
     });
     return {
-      items: rows.map((t) => ({
-        id: t.id,
-        code: t.code,
-        plateNumber: t.plateNumber,
-        truckType: t.truckType,
-        carrier: t.carrier ? { id: t.carrier.id, code: t.carrier.code, name: t.carrier.name } : null,
+      items: rows.map((truck) => ({
+        id: truck.id,
+        code: truck.code,
+        plateNumber: truck.plateNumber,
+        truckType: truck.truckType,
+        carrier: truck.carrier ? { id: truck.carrier.id, code: truck.carrier.code, name: truck.carrier.name } : null,
       })),
       nextCursor: null,
     };
@@ -131,13 +131,13 @@ export class MasterDataController {
   }
 
   @Get('drivers')
-  async drivers(@Query('q') q?: string) {
+  async drivers(@Query('q') searchText?: string) {
     const rows = await this.prisma.driver.findMany({
-      where: { deletedAt: null, ...(q ? { fullName: { contains: q, mode: 'insensitive' as const } } : {}) },
+      where: { deletedAt: null, ...(searchText ? { fullName: { contains: searchText, mode: 'insensitive' as const } } : {}) },
       orderBy: { fullName: 'asc' },
       take: 200,
     });
-    return { items: rows.map((d) => ({ id: d.id, fullName: d.fullName, licenseNumber: d.licenseNumber, phone: d.phone })), nextCursor: null };
+    return { items: rows.map((driver) => ({ id: driver.id, fullName: driver.fullName, licenseNumber: driver.licenseNumber, phone: driver.phone })), nextCursor: null };
   }
 
   @Post('drivers')

@@ -86,16 +86,16 @@ export class PalletsService {
    * Di chuyển cả pallet trong transaction của caller (BR-04, BR-12, BR-19):
    * khóa location → kiểm tra freeze + sức chứa → MOVE từng balance (reservation đi theo) → occupancy → movement → event.
    */
-  async move(tx: Tx, o: MoveHuOptions): Promise<{ hu: HandlingUnit; changes: BalanceChange[] }> {
-    const hu = await tx.handlingUnit.findFirst({ where: { id: o.huId, siteId: o.siteId } });
+  async move(tx: Tx, options: MoveHuOptions): Promise<{ hu: HandlingUnit; changes: BalanceChange[] }> {
+    const hu = await tx.handlingUnit.findFirst({ where: { id: options.huId, siteId: options.siteId } });
     if (!hu) throw DomainError.notFound('Pallet');
-    if (o.expectedVersion !== undefined && hu.version !== o.expectedVersion) throw DomainError.concurrent();
-    if (!o.internal && !['IN_STOCK', 'RECEIVING'].includes(hu.lifecycle)) {
+    if (options.expectedVersion !== undefined && hu.version !== options.expectedVersion) throw DomainError.concurrent();
+    if (!options.internal && !['IN_STOCK', 'RECEIVING'].includes(hu.lifecycle)) {
       throw DomainError.rule(ErrorCode.HU_NOT_MOVABLE, `Pallet ${hu.code} is ${hu.lifecycle} — move it through its shipment flow`);
     }
-    if (hu.locationId === o.toLocationId) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Pallet is already at this location');
-    await this.locks.lockForUpdate(tx, [o.toLocationId, ...(hu.locationId ? [hu.locationId] : [])]);
-    const dest = await this.sites.requireLocation(tx, o.siteId, o.toLocationId);
+    if (hu.locationId === options.toLocationId) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Pallet is already at this location');
+    await this.locks.lockForUpdate(tx, [options.toLocationId, ...(hu.locationId ? [hu.locationId] : [])]);
+    const dest = await this.sites.requireLocation(tx, options.siteId, options.toLocationId);
     await this.sites.assertNotFrozen(tx, dest.id);
     if (hu.locationId) await this.sites.assertNotFrozen(tx, hu.locationId);
 
@@ -104,13 +104,13 @@ export class PalletsService {
     for (const occ of current) await this.occupancy.release(tx, occ.id);
     if (CAPACITY_TYPES.includes(dest.locationType)) {
       try {
-        await this.occupancy.occupyDirect(tx, { siteId: o.siteId, locationId: dest.id, occupantType: 'HANDLING_UNIT', occupantId: hu.id }, o.source);
+        await this.occupancy.occupyDirect(tx, { siteId: options.siteId, locationId: dest.id, occupantType: 'HANDLING_UNIT', occupantId: hu.id }, options.source);
       } catch (err) {
-        if (!(err instanceof DomainError) || err.code !== ErrorCode.LOCATION_CAPACITY_EXCEEDED || !o.overrideCapacity) throw err;
+        if (!(err instanceof DomainError) || err.code !== ErrorCode.LOCATION_CAPACITY_EXCEEDED || !options.overrideCapacity) throw err;
         await tx.locationOccupancy.create({
-          data: { siteId: o.siteId, locationId: dest.id, occupantType: 'HANDLING_UNIT', occupantId: hu.id, kind: 'OCCUPIED', singleOccupancy: false, occupiedAt: new Date(), positionSource: o.source },
+          data: { siteId: options.siteId, locationId: dest.id, occupantType: 'HANDLING_UNIT', occupantId: hu.id, kind: 'OCCUPIED', singleOccupancy: false, occupiedAt: new Date(), positionSource: options.source },
         });
-        await this.audit.record(tx, { siteId: o.siteId, action: 'CAPACITY_OVERRIDDEN', entityType: 'Location', entityId: dest.id, reason: o.reason });
+        await this.audit.record(tx, { siteId: options.siteId, action: 'CAPACITY_OVERRIDDEN', entityType: 'Location', entityId: dest.id, reason: options.reason });
       }
     }
 
@@ -118,52 +118,52 @@ export class PalletsService {
     const txIds: bigint[] = [];
     if (hu.locationId) {
       const balances = await tx.inventoryBalance.findMany({ where: { handlingUnitId: hu.id, locationId: hu.locationId, qtyOnHand: { gt: 0 } }, orderBy: { id: 'asc' } });
-      for (const [i, b] of balances.entries()) {
-        const r = await this.ledger.post(tx, {
-          siteId: o.siteId,
+      for (const [balanceIndex, balance] of balances.entries()) {
+        const ledgerResult = await this.ledger.post(tx, {
+          siteId: options.siteId,
           txType: 'MOVE',
-          idempotencyKey: `${o.commandId}:move:${i}`,
-          skuId: b.skuId,
-          lotId: b.lotId,
+          idempotencyKey: `${options.commandId}:move:${balanceIndex}`,
+          skuId: balance.skuId,
+          lotId: balance.lotId,
           handlingUnitId: hu.id,
           fromLocationId: hu.locationId,
           toLocationId: dest.id,
-          fromStatus: b.stockStatus,
-          quantity: b.qtyOnHand,
-          carryReserved: b.qtyReserved,
-          referenceType: o.taskId ? 'TASK' : 'MOVE_ORDER',
-          referenceId: o.taskId ?? o.commandId,
-          receivedAt: b.receivedAt,
+          fromStatus: balance.stockStatus,
+          quantity: balance.qtyOnHand,
+          carryReserved: balance.qtyReserved,
+          referenceType: options.taskId ? 'TASK' : 'MOVE_ORDER',
+          referenceId: options.taskId ?? options.commandId,
+          receivedAt: balance.receivedAt,
         });
-        changes.push(...r.changes);
-        txIds.push(r.tx.id);
+        changes.push(...ledgerResult.changes);
+        txIds.push(ledgerResult.tx.id);
       }
     }
-    const lifecycle = o.lifecycle ?? (dest.locationType === 'STORAGE' && hu.lifecycle === 'RECEIVING' ? 'IN_STOCK' : hu.lifecycle);
+    const lifecycle = options.lifecycle ?? (dest.locationType === 'STORAGE' && hu.lifecycle === 'RECEIVING' ? 'IN_STOCK' : hu.lifecycle);
     const updated = await tx.handlingUnit.update({
       where: { id: hu.id },
-      data: { locationId: dest.id, positionSource: o.source, positionConfirmedAt: new Date(), lifecycle, version: { increment: 1 } },
+      data: { locationId: dest.id, positionSource: options.source, positionConfirmedAt: new Date(), lifecycle, version: { increment: 1 } },
     });
     await this.movements.record(tx, {
-      siteId: o.siteId,
+      siteId: options.siteId,
       subjectType: 'HANDLING_UNIT',
       subjectId: hu.id,
       fromLocationId: hu.locationId,
       toLocationId: dest.id,
-      positionSource: o.source,
-      reason: o.reason,
-      taskId: o.taskId,
+      positionSource: options.source,
+      reason: options.reason,
+      taskId: options.taskId,
     });
     await this.audit.record(tx, {
-      siteId: o.siteId,
+      siteId: options.siteId,
       action: 'INVENTORY_MOVED',
       entityType: 'HandlingUnit',
       entityId: hu.id,
       diff: { before: { locationId: hu.locationId, lifecycle: hu.lifecycle }, after: { locationId: dest.id, lifecycle } },
-      reason: o.reason,
+      reason: options.reason,
     });
-    await this.events.inventoryUpdated(tx, o.siteId, changes, txIds);
-    await this.events.palletMoved(tx, o.siteId, hu.id, hu.locationId, dest.id);
+    await this.events.inventoryUpdated(tx, options.siteId, changes, txIds);
+    await this.events.palletMoved(tx, options.siteId, hu.id, hu.locationId, dest.id);
     return { hu: updated, changes };
   }
 

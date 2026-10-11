@@ -31,56 +31,56 @@ export class NotificationsService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.bus.subscribe((e) => this.handle(e));
+    this.bus.subscribe((event) => this.handle(event));
   }
 
   private async siteCode(siteId: string) {
     if (!this.siteCodes.has(siteId)) {
-      const s = await this.prisma.site.findUnique({ where: { id: siteId } });
-      if (s) this.siteCodes.set(siteId, s.code);
+      const site = await this.prisma.site.findUnique({ where: { id: siteId } });
+      if (site) this.siteCodes.set(siteId, site.code);
     }
     return this.siteCodes.get(siteId) ?? null;
   }
 
   /** Rule FR-18.02 (phần MVP): exception, xe nâng hỏng / pin yếu, xe lưu bãi chờ duyệt xuất, xe tải tới cổng. */
-  private async rules(e: RealtimeEnvelope): Promise<Rule[]> {
-    const d = e.data as Record<string, any>;
-    const code = await this.siteCode(e.siteId);
+  private async rules(event: RealtimeEnvelope): Promise<Rule[]> {
+    const payload = event.data as Record<string, any>;
+    const code = await this.siteCode(event.siteId);
     const base = code ? `/sites/${code}` : '';
-    switch (e.type) {
+    switch (event.type) {
       case 'exception.raised':
-        if (d.status !== 'OPEN') return [];
+        if (payload.status !== 'OPEN') return [];
         return [
           {
             permission: 'exception.resolve',
             category: 'EXCEPTION',
-            severity: d.severity === 'CRITICAL' ? 'CRITICAL' : d.severity === 'HIGH' ? 'HIGH' : 'WARNING',
-            title: `${d.code} · ${d.caseType}`,
-            body: d.description,
-            link: `${base}/exceptions?case=${d.caseId}`,
+            severity: payload.severity === 'CRITICAL' ? 'CRITICAL' : payload.severity === 'HIGH' ? 'HIGH' : 'WARNING',
+            title: `${payload.code} · ${payload.caseType}`,
+            body: payload.description,
+            link: `${base}/exceptions?case=${payload.caseId}`,
           },
         ];
       case 'forklift.status_changed': {
-        const f = d.forklift ?? {};
+        const forklift = payload.forklift ?? {};
         const out: Rule[] = [];
-        if (f.status === 'MAINTENANCE' && d.fromStatus !== 'MAINTENANCE') {
-          out.push({ permission: 'equipment.manage', category: 'EQUIPMENT', severity: 'HIGH', title: `${f.code} · Maintenance`, body: d.reason ?? null, link: `${base}?select=forklift:${f.id}` });
+        if (forklift.status === 'MAINTENANCE' && payload.fromStatus !== 'MAINTENANCE') {
+          out.push({ permission: 'equipment.manage', category: 'EQUIPMENT', severity: 'HIGH', title: `${forklift.code} · Maintenance`, body: payload.reason ?? null, link: `${base}?select=forklift:${forklift.id}` });
         }
-        if (d.lowBattery) {
-          out.push({ permission: 'equipment.manage', category: 'EQUIPMENT', severity: 'WARNING', title: `${f.code} · Battery ${f.batteryPct}% (< ${LOW_BATTERY_PCT}%)`, body: null, link: `${base}?select=forklift:${f.id}` });
+        if (payload.lowBattery) {
+          out.push({ permission: 'equipment.manage', category: 'EQUIPMENT', severity: 'WARNING', title: `${forklift.code} · Battery ${forklift.batteryPct}% (< ${LOW_BATTERY_PCT}%)`, body: null, link: `${base}?select=forklift:${forklift.id}` });
         }
         return out;
       }
       case 'vehicle.status_changed': {
-        const v = d.vehicle ?? {};
-        if (v.status === 'RELEASE_REQUESTED' && d.fromStatus === 'STORED') {
-          return [{ permission: 'vehicle.release.approve', category: 'VEHICLE', severity: 'INFO', title: `Release request · ${v.vin}`, body: v.label ?? null, link: `${base}/vehicles?stay=${v.stayId}` }];
+        const vehicle = payload.vehicle ?? {};
+        if (vehicle.status === 'RELEASE_REQUESTED' && payload.fromStatus === 'STORED') {
+          return [{ permission: 'vehicle.release.approve', category: 'VEHICLE', severity: 'INFO', title: `Release request · ${vehicle.vin}`, body: vehicle.label ?? null, link: `${base}/vehicles?stay=${vehicle.stayId}` }];
         }
         return [];
       }
       case 'truck.arrived': {
-        const truck = d.visit?.truck ?? {};
-        return [{ permission: 'yard.dock.assign', category: 'YARD', severity: 'INFO', title: `${truck.code ?? 'Truck'} at gate`, body: [truck.plateNumber, truck.carrier?.name].filter(Boolean).join(' · ') || null, link: `${base}/yard?visit=${d.visitId}` }];
+        const truck = payload.visit?.truck ?? {};
+        return [{ permission: 'yard.dock.assign', category: 'YARD', severity: 'INFO', title: `${truck.code ?? 'Truck'} at gate`, body: [truck.plateNumber, truck.carrier?.name].filter(Boolean).join(' · ') || null, link: `${base}/yard?visit=${payload.visitId}` }];
       }
       default:
         return [];
@@ -95,19 +95,19 @@ export class NotificationsService implements OnModuleInit {
       },
       select: { id: true },
     });
-    return users.map((u) => u.id);
+    return users.map((user) => user.id);
   }
 
-  private async handle(e: RealtimeEnvelope) {
-    for (const rule of await this.rules(e)) {
-      const userIds = await this.recipients(e.siteId, rule.permission);
+  private async handle(event: RealtimeEnvelope) {
+    for (const rule of await this.rules(event)) {
+      const userIds = await this.recipients(event.siteId, rule.permission);
       if (userIds.length === 0) continue;
       await this.prisma.notification.createMany({
-        data: userIds.map((userId) => ({ siteId: e.siteId, userId, eventId: `${e.eventId}:${rule.category}`, category: rule.category, severity: rule.severity, title: rule.title, body: rule.body ?? null, link: rule.link ?? null })),
+        data: userIds.map((userId) => ({ siteId: event.siteId, userId, eventId: `${event.eventId}:${rule.category}`, category: rule.category, severity: rule.severity, title: rule.title, body: rule.body ?? null, link: rule.link ?? null })),
         skipDuplicates: true,
       });
-      const created = await this.prisma.notification.findMany({ where: { eventId: `${e.eventId}:${rule.category}`, userId: { in: userIds } } });
-      for (const n of created) this.users.send(n.userId, 'notification.created', { notificationId: n.id, category: n.category, severity: n.severity, title: n.title, link: n.link });
+      const created = await this.prisma.notification.findMany({ where: { eventId: `${event.eventId}:${rule.category}`, userId: { in: userIds } } });
+      for (const notification of created) this.users.send(notification.userId, 'notification.created', { notificationId: notification.id, category: notification.category, severity: notification.severity, title: notification.title, link: notification.link });
     }
   }
 
@@ -120,18 +120,18 @@ export class NotificationsService implements OnModuleInit {
       this.prisma.notification.count({ where: { ...where, readAt: null } }),
     ]);
     const items: NotificationDto[] = [];
-    for (const n of rows) {
+    for (const notification of rows) {
       items.push({
-        id: n.id,
-        siteId: n.siteId,
-        siteCode: n.siteId ? await this.siteCode(n.siteId) : null,
-        category: n.category,
-        severity: n.severity as NotificationSeverity,
-        title: n.title,
-        body: n.body,
-        link: n.link,
-        readAt: n.readAt?.toISOString() ?? null,
-        createdAt: n.createdAt.toISOString(),
+        id: notification.id,
+        siteId: notification.siteId,
+        siteCode: notification.siteId ? await this.siteCode(notification.siteId) : null,
+        category: notification.category,
+        severity: notification.severity as NotificationSeverity,
+        title: notification.title,
+        body: notification.body,
+        link: notification.link,
+        readAt: notification.readAt?.toISOString() ?? null,
+        createdAt: notification.createdAt.toISOString(),
       });
     }
     return { items, unreadCount };

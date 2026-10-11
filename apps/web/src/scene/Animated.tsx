@@ -13,15 +13,15 @@ export function Animated({ objectKey, x, z, rotY, speed = 6, children }: { objec
   const target = useRef(new Vector3(x, 0, z));
   const targetRot = useRef(rotY);
   const initialized = useRef(false);
-  const invalidate = useThree((s) => s.invalidate);
+  const invalidate = useThree((state) => state.invalidate);
 
   useEffect(() => {
     target.current.set(x, 0, z);
     targetRot.current = rotY;
-    const g = ref.current;
-    if (g && !initialized.current) {
-      g.position.copy(target.current);
-      g.rotation.y = rotY;
+    const group = ref.current;
+    if (group && !initialized.current) {
+      group.position.copy(target.current);
+      group.rotation.y = rotY;
       initialized.current = true;
     }
     invalidate();
@@ -32,18 +32,18 @@ export function Animated({ objectKey, x, z, rotY, speed = 6, children }: { objec
   }, [objectKey]);
 
   useFrame((_, dt) => {
-    const g = ref.current;
-    if (!g) return;
-    const dist = g.position.distanceTo(target.current);
-    if (dist < 0.02 && Math.abs(g.rotation.y - targetRot.current) < 0.01) return;
+    const group = ref.current;
+    if (!group) return;
+    const dist = group.position.distanceTo(target.current);
+    if (dist < 0.02 && Math.abs(group.rotation.y - targetRot.current) < 0.01) return;
     if (dist > 120 || dt > 0.5) {
-      g.position.copy(target.current); // tab ẩn / quá xa → snap
-      g.rotation.y = targetRot.current;
+      group.position.copy(target.current); // tab ẩn / quá xa → snap
+      group.rotation.y = targetRot.current;
       return;
     }
     const step = Math.min(dist, speed * dt * Math.max(1, dist / 10));
-    g.position.add(target.current.clone().sub(g.position).normalize().multiplyScalar(step));
-    g.rotation.y += (targetRot.current - g.rotation.y) * Math.min(1, dt * 4);
+    group.position.add(target.current.clone().sub(group.position).normalize().multiplyScalar(step));
+    group.rotation.y += (targetRot.current - group.rotation.y) * Math.min(1, dt * 4);
     invalidate();
   });
 

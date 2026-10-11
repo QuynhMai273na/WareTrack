@@ -49,8 +49,8 @@ export const useDockLocations = (siteId: string | undefined) =>
 export const useAvailability = (siteId: string | undefined) =>
   useQuery({ queryKey: ['site', siteId, 'inventory', 'availability'], queryFn: () => api<AvailabilityDto[]>(`/sites/${siteId}/inventory/availability`), enabled: !!siteId });
 
-export const useBalances = (siteId: string | undefined, q: string) =>
-  useQuery({ queryKey: ['site', siteId, 'inventory', 'balances', q], queryFn: () => api<BalanceDto[]>(`/sites/${siteId}/inventory/balances${q ? `?q=${encodeURIComponent(q)}` : ''}`), enabled: !!siteId });
+export const useBalances = (siteId: string | undefined, searchQuery: string) =>
+  useQuery({ queryKey: ['site', siteId, 'inventory', 'balances', searchQuery], queryFn: () => api<BalanceDto[]>(`/sites/${siteId}/inventory/balances${searchQuery ? `?q=${encodeURIComponent(searchQuery)}` : ''}`), enabled: !!siteId });
 
 export const usePallet = (siteId: string | undefined, huId: string | undefined) =>
   useQuery({ queryKey: ['site', siteId, 'inventory', 'pallet', huId], queryFn: () => api<HandlingUnitDetail>(`/sites/${siteId}/pallets/${huId}`), enabled: !!siteId && !!huId });
@@ -86,7 +86,7 @@ export const useTasks = (siteId: string | undefined, filter = '') =>
 export const useSkus = () => useQuery({ queryKey: ['skus'], queryFn: () => api<SkuDto[]>('/skus'), staleTime: 60_000 });
 
 export const usePartners = (type?: string) =>
-  useQuery({ queryKey: ['partners', type ?? 'all'], queryFn: () => api<{ items: Array<{ id: string; code: string; name: string; partnerTypes: string[] }> }>(`/partners${type ? `?type=${type}` : ''}`).then((r) => r.items), staleTime: 60_000 });
+  useQuery({ queryKey: ['partners', type ?? 'all'], queryFn: () => api<{ items: Array<{ id: string; code: string; name: string; partnerTypes: string[] }> }>(`/partners${type ? `?type=${type}` : ''}`).then((response) => response.items), staleTime: 60_000 });
 
 export interface EquipmentDetail {
   id: string;

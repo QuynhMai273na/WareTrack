@@ -6,8 +6,8 @@ import { PrismaService } from '../../platform/prisma/prisma.service';
 import { DashboardContributors } from '../dashboard/contributors';
 import { InventoryEvents } from './inventory-events.service';
 
-const D = Prisma.Decimal;
-const f3 = (v: Prisma.Decimal | number | string) => new D(v).toFixed(3);
+const Decimal = Prisma.Decimal;
+const f3 = (amount: Prisma.Decimal | number | string) => new Decimal(amount).toFixed(3);
 
 type BalanceRefs = InventoryBalance & { sku: Sku; lot: Lot | null; location: Location; hu: HandlingUnit | null };
 
@@ -24,21 +24,21 @@ export class InventoryQueryService implements OnModuleInit {
     // Pallet đang ở site → scene 3D (mục 18.3)
     this.contributors.addSnapshot(async (tx, siteId) => {
       const hus = await tx.handlingUnit.findMany({ where: { siteId, lifecycle: { notIn: ['DISPATCHED', 'EMPTY'] }, locationId: { not: null } } });
-      const balances = await tx.inventoryBalance.findMany({ where: { handlingUnitId: { in: hus.map((h) => h.id) }, qtyOnHand: { gt: 0 } }, orderBy: { qtyOnHand: 'desc' } });
-      const skus = new Map((await tx.sku.findMany({ where: { id: { in: [...new Set(balances.map((b) => b.skuId))] } } })).map((s) => [s.id, s.name]));
+      const balances = await tx.inventoryBalance.findMany({ where: { handlingUnitId: { in: hus.map((handlingUnit) => handlingUnit.id) }, qtyOnHand: { gt: 0 } }, orderBy: { qtyOnHand: 'desc' } });
+      const skus = new Map((await tx.sku.findMany({ where: { id: { in: [...new Set(balances.map((balance) => balance.skuId))] } } })).map((sku) => [sku.id, sku.name]));
       const first = new Map<string, InventoryBalance>();
-      for (const b of balances) if (b.handlingUnitId && !first.has(b.handlingUnitId)) first.set(b.handlingUnitId, b);
+      for (const balance of balances) if (balance.handlingUnitId && !first.has(balance.handlingUnitId)) first.set(balance.handlingUnitId, balance);
       return {
-        pallets: hus.map((h) => {
-          const b = first.get(h.id);
+        pallets: hus.map((handlingUnit) => {
+          const firstBalance = first.get(handlingUnit.id);
           return {
-            id: h.id,
-            code: h.code,
-            label: b ? (skus.get(b.skuId) ?? '') : 'Empty pallet',
-            lifecycle: h.lifecycle,
-            stockStatus: b?.stockStatus ?? null,
-            position: { locationId: h.locationId, source: h.positionSource ?? 'CONFIRMED_MANUAL', confirmedAt: (h.positionConfirmedAt ?? h.updatedAt).toISOString() },
-            version: h.version,
+            id: handlingUnit.id,
+            code: handlingUnit.code,
+            label: firstBalance ? (skus.get(firstBalance.skuId) ?? '') : 'Empty pallet',
+            lifecycle: handlingUnit.lifecycle,
+            stockStatus: firstBalance?.stockStatus ?? null,
+            position: { locationId: handlingUnit.locationId, source: handlingUnit.positionSource ?? 'CONFIRMED_MANUAL', confirmedAt: (handlingUnit.positionConfirmedAt ?? handlingUnit.updatedAt).toISOString() },
+            version: handlingUnit.version,
           };
         }),
       };
@@ -48,56 +48,56 @@ export class InventoryQueryService implements OnModuleInit {
       const onHand = await this.prisma.handlingUnit.count({ where: { siteId, lifecycle: { in: ['RECEIVING', 'IN_STOCK', 'PICKED', 'STAGED', 'LOADED'] } } });
       const receivedToday = await this.prisma.handlingUnit.count({ where: { siteId, createdAt: { gte: todayStart } } });
       const storage = await this.prisma.location.findMany({ where: { siteId, locationType: 'STORAGE', deletedAt: null, isActive: true, blockedAt: null } });
-      const capacity = storage.reduce((s, l) => s + Number(l.capacityUnits), 0);
+      const capacity = storage.reduce((sum, location) => sum + Number(location.capacityUnits), 0);
       return [{ key: 'STOCK_ON_HAND_PALLETS', value: onHand, unit: 'pallets', total: capacity, delta: receivedToday, deltaPeriod: 'today', asOf: now.toISOString() }];
     });
   }
 
-  skuDto(s: Sku): SkuDto {
+  skuDto(sku: Sku): SkuDto {
     return {
-      id: s.id,
-      code: s.code,
-      name: s.name,
-      category: s.category,
-      baseUom: s.baseUom,
-      uomDecimals: s.uomDecimals,
-      lotTracked: s.lotTracked,
-      serialTracked: s.serialTracked,
-      expiryTracked: s.expiryTracked,
-      qcRequired: s.qcRequired,
-      allocationStrategy: s.allocationStrategy,
-      unitWeightKg: s.unitWeightKg ? f3(s.unitWeightKg) : null,
-      lowStockThreshold: s.lowStockThreshold ? f3(s.lowStockThreshold) : null,
-      version: s.version,
+      id: sku.id,
+      code: sku.code,
+      name: sku.name,
+      category: sku.category,
+      baseUom: sku.baseUom,
+      uomDecimals: sku.uomDecimals,
+      lotTracked: sku.lotTracked,
+      serialTracked: sku.serialTracked,
+      expiryTracked: sku.expiryTracked,
+      qcRequired: sku.qcRequired,
+      allocationStrategy: sku.allocationStrategy,
+      unitWeightKg: sku.unitWeightKg ? f3(sku.unitWeightKg) : null,
+      lowStockThreshold: sku.lowStockThreshold ? f3(sku.lowStockThreshold) : null,
+      version: sku.version,
     };
   }
 
   private async withRefs(balances: InventoryBalance[]): Promise<BalanceRefs[]> {
     const [skus, lots, locs, hus] = await Promise.all([
-      this.prisma.sku.findMany({ where: { id: { in: [...new Set(balances.map((b) => b.skuId))] } } }),
-      this.prisma.lot.findMany({ where: { id: { in: balances.map((b) => b.lotId).filter((x): x is string => !!x) } } }),
-      this.prisma.location.findMany({ where: { id: { in: [...new Set(balances.map((b) => b.locationId))] } } }),
-      this.prisma.handlingUnit.findMany({ where: { id: { in: balances.map((b) => b.handlingUnitId).filter((x): x is string => !!x) } } }),
+      this.prisma.sku.findMany({ where: { id: { in: [...new Set(balances.map((balance) => balance.skuId))] } } }),
+      this.prisma.lot.findMany({ where: { id: { in: balances.map((balance) => balance.lotId).filter((lotId): lotId is string => !!lotId) } } }),
+      this.prisma.location.findMany({ where: { id: { in: [...new Set(balances.map((balance) => balance.locationId))] } } }),
+      this.prisma.handlingUnit.findMany({ where: { id: { in: balances.map((balance) => balance.handlingUnitId).filter((handlingUnitId): handlingUnitId is string => !!handlingUnitId) } } }),
     ]);
-    const m = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
-    const ms = m(skus), ml = m(lots), mloc = m(locs), mh = m(hus);
-    return balances.map((b) => ({ ...b, sku: ms.get(b.skuId)!, lot: b.lotId ? (ml.get(b.lotId) ?? null) : null, location: mloc.get(b.locationId)!, hu: b.handlingUnitId ? (mh.get(b.handlingUnitId) ?? null) : null }));
+    const mapById = <T extends { id: string }>(xs: T[]) => new Map(xs.map((record) => [record.id, record]));
+    const ms = mapById(skus), ml = mapById(lots), mloc = mapById(locs), mh = mapById(hus);
+    return balances.map((balance) => ({ ...balance, sku: ms.get(balance.skuId)!, lot: balance.lotId ? (ml.get(balance.lotId) ?? null) : null, location: mloc.get(balance.locationId)!, hu: balance.handlingUnitId ? (mh.get(balance.handlingUnitId) ?? null) : null }));
   }
 
-  balanceDto(b: BalanceRefs): BalanceDto {
-    const available = b.stockStatus === 'AVAILABLE' ? new D(b.qtyOnHand).minus(b.qtyReserved) : new D(0);
+  balanceDto(balance: BalanceRefs): BalanceDto {
+    const available = balance.stockStatus === 'AVAILABLE' ? new Decimal(balance.qtyOnHand).minus(balance.qtyReserved) : new Decimal(0);
     return {
-      id: b.id,
-      sku: { id: b.sku.id, code: b.sku.code, name: b.sku.name, baseUom: b.sku.baseUom },
-      lot: b.lot ? { id: b.lot.id, lotNumber: b.lot.lotNumber, expiresOn: b.lot.expiresOn?.toISOString().slice(0, 10) ?? null } : null,
-      location: { id: b.location.id, code: b.location.code, type: b.location.locationType },
-      handlingUnit: b.hu ? { id: b.hu.id, code: b.hu.code } : null,
-      stockStatus: b.stockStatus,
-      qtyOnHand: f3(b.qtyOnHand),
-      qtyReserved: f3(b.qtyReserved),
+      id: balance.id,
+      sku: { id: balance.sku.id, code: balance.sku.code, name: balance.sku.name, baseUom: balance.sku.baseUom },
+      lot: balance.lot ? { id: balance.lot.id, lotNumber: balance.lot.lotNumber, expiresOn: balance.lot.expiresOn?.toISOString().slice(0, 10) ?? null } : null,
+      location: { id: balance.location.id, code: balance.location.code, type: balance.location.locationType },
+      handlingUnit: balance.hu ? { id: balance.hu.id, code: balance.hu.code } : null,
+      stockStatus: balance.stockStatus,
+      qtyOnHand: f3(balance.qtyOnHand),
+      qtyReserved: f3(balance.qtyReserved),
       qtyAvailable: available.toFixed(3),
-      receivedAt: b.receivedAt.toISOString(),
-      version: b.version,
+      receivedAt: balance.receivedAt.toISOString(),
+      version: balance.version,
     };
   }
 
@@ -115,34 +115,34 @@ export class InventoryQueryService implements OnModuleInit {
       take: 1000,
     });
     const refs = await this.withRefs(rows);
-    const q = filter.q?.toLowerCase();
-    return refs.filter((b) => !q || [b.sku.code, b.sku.name, b.location.code, b.hu?.code ?? '', b.lot?.lotNumber ?? ''].some((s) => s.toLowerCase().includes(q))).map((b) => this.balanceDto(b));
+    const searchText = filter.q?.toLowerCase();
+    return refs.filter((balance) => !searchText || [balance.sku.code, balance.sku.name, balance.location.code, balance.hu?.code ?? '', balance.lot?.lotNumber ?? ''].some((field) => field.toLowerCase().includes(searchText))).map((balance) => this.balanceDto(balance));
   }
 
   async balance(siteId: string, id: string): Promise<BalanceDto> {
-    const b = await this.prisma.inventoryBalance.findFirst({ where: { id, siteId } });
-    if (!b) throw DomainError.notFound('Balance');
-    return this.balanceDto((await this.withRefs([b]))[0]);
+    const balance = await this.prisma.inventoryBalance.findFirst({ where: { id, siteId } });
+    if (!balance) throw DomainError.notFound('Balance');
+    return this.balanceDto((await this.withRefs([balance]))[0]);
   }
 
   /** Available theo SKU + cờ low stock (site inspector "Inventory" như video). */
   async availability(siteId: string): Promise<AvailabilityDto[]> {
     const rows = await this.prisma.inventoryBalance.groupBy({ by: ['skuId', 'stockStatus'], where: { siteId, qtyOnHand: { gt: 0 } }, _sum: { qtyOnHand: true, qtyReserved: true } });
-    const skus = await this.prisma.sku.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.skuId))] } }, orderBy: { name: 'asc' } });
-    return skus.map((s) => {
-      const mine = rows.filter((r) => r.skuId === s.id);
-      const onHand = mine.reduce((acc, r) => acc.plus(r._sum.qtyOnHand ?? 0), new D(0));
-      const avail = mine.find((r) => r.stockStatus === 'AVAILABLE');
-      const reserved = new D(avail?._sum.qtyReserved ?? 0);
-      const available = new D(avail?._sum.qtyOnHand ?? 0).minus(reserved);
+    const skus = await this.prisma.sku.findMany({ where: { id: { in: [...new Set(rows.map((row) => row.skuId))] } }, orderBy: { name: 'asc' } });
+    return skus.map((sku) => {
+      const mine = rows.filter((row) => row.skuId === sku.id);
+      const onHand = mine.reduce((acc, row) => acc.plus(row._sum.qtyOnHand ?? 0), new Decimal(0));
+      const avail = mine.find((row) => row.stockStatus === 'AVAILABLE');
+      const reserved = new Decimal(avail?._sum.qtyReserved ?? 0);
+      const available = new Decimal(avail?._sum.qtyOnHand ?? 0).minus(reserved);
       return {
-        sku: { id: s.id, code: s.code, name: s.name, baseUom: s.baseUom },
+        sku: { id: sku.id, code: sku.code, name: sku.name, baseUom: sku.baseUom },
         onHand: onHand.toFixed(3),
         reserved: reserved.toFixed(3),
         available: available.toFixed(3),
-        byStatus: Object.fromEntries(mine.map((r) => [r.stockStatus, f3(r._sum.qtyOnHand ?? 0)])),
-        lowStock: s.lowStockThreshold ? available.lt(s.lowStockThreshold) : false,
-        lowStockThreshold: s.lowStockThreshold ? f3(s.lowStockThreshold) : null,
+        byStatus: Object.fromEntries(mine.map((row) => [row.stockStatus, f3(row._sum.qtyOnHand ?? 0)])),
+        lowStock: sku.lowStockThreshold ? available.lt(sku.lowStockThreshold) : false,
+        lowStockThreshold: sku.lowStockThreshold ? f3(sku.lowStockThreshold) : null,
       };
     });
   }
@@ -153,35 +153,35 @@ export class InventoryQueryService implements OnModuleInit {
       orderBy: { id: 'desc' },
       take: Math.min(filter.limit ?? 200, 500),
     });
-    const ids = (xs: Array<string | null>) => [...new Set(xs.filter((x): x is string => !!x))];
+    const ids = (xs: Array<string | null>) => [...new Set(xs.filter((id): id is string => !!id))];
     const [skus, lots, hus, locs, users, reversals] = await Promise.all([
-      this.prisma.sku.findMany({ where: { id: { in: ids(rows.map((r) => r.skuId)) } } }),
-      this.prisma.lot.findMany({ where: { id: { in: ids(rows.map((r) => r.lotId)) } } }),
-      this.prisma.handlingUnit.findMany({ where: { id: { in: ids(rows.map((r) => r.handlingUnitId)) } } }),
-      this.prisma.location.findMany({ where: { id: { in: ids(rows.flatMap((r) => [r.fromLocationId, r.toLocationId])) } } }),
-      this.prisma.user.findMany({ where: { id: { in: ids(rows.map((r) => r.actorId)) } } }),
-      this.prisma.inventoryTransaction.findMany({ where: { reversesTxId: { in: rows.map((r) => r.id) } }, select: { id: true, reversesTxId: true } }),
+      this.prisma.sku.findMany({ where: { id: { in: ids(rows.map((row) => row.skuId)) } } }),
+      this.prisma.lot.findMany({ where: { id: { in: ids(rows.map((row) => row.lotId)) } } }),
+      this.prisma.handlingUnit.findMany({ where: { id: { in: ids(rows.map((row) => row.handlingUnitId)) } } }),
+      this.prisma.location.findMany({ where: { id: { in: ids(rows.flatMap((row) => [row.fromLocationId, row.toLocationId])) } } }),
+      this.prisma.user.findMany({ where: { id: { in: ids(rows.map((row) => row.actorId)) } } }),
+      this.prisma.inventoryTransaction.findMany({ where: { reversesTxId: { in: rows.map((row) => row.id) } }, select: { id: true, reversesTxId: true } }),
     ]);
-    const mapBy = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
+    const mapBy = <T extends { id: string }>(xs: T[]) => new Map(xs.map((record) => [record.id, record]));
     const ms = mapBy(skus), ml = mapBy(lots), mh = mapBy(hus), mloc = mapBy(locs), mu = mapBy(users);
-    const reversedBy = new Map(reversals.map((r) => [String(r.reversesTxId), String(r.id)]));
-    return rows.map((r) => ({
-      id: String(r.id),
-      txType: r.txType,
-      sku: { id: r.skuId, code: ms.get(r.skuId)?.code ?? '' },
-      lotNumber: r.lotId ? (ml.get(r.lotId)?.lotNumber ?? null) : null,
-      handlingUnitCode: r.handlingUnitId ? (mh.get(r.handlingUnitId)?.code ?? null) : null,
-      fromLocation: r.fromLocationId ? (mloc.get(r.fromLocationId)?.code ?? null) : null,
-      toLocation: r.toLocationId ? (mloc.get(r.toLocationId)?.code ?? null) : null,
-      fromStatus: r.fromStatus,
-      toStatus: r.toStatus,
-      quantity: f3(r.quantity),
-      referenceType: r.referenceType,
-      referenceId: r.referenceId,
-      reversesTxId: r.reversesTxId ? String(r.reversesTxId) : null,
-      reversedByTxId: reversedBy.get(String(r.id)) ?? null,
-      actor: r.actorId ? (mu.get(r.actorId)?.fullName ?? null) : 'System',
-      occurredAt: r.occurredAt.toISOString(),
+    const reversedBy = new Map(reversals.map((reversal) => [String(reversal.reversesTxId), String(reversal.id)]));
+    return rows.map((row) => ({
+      id: String(row.id),
+      txType: row.txType,
+      sku: { id: row.skuId, code: ms.get(row.skuId)?.code ?? '' },
+      lotNumber: row.lotId ? (ml.get(row.lotId)?.lotNumber ?? null) : null,
+      handlingUnitCode: row.handlingUnitId ? (mh.get(row.handlingUnitId)?.code ?? null) : null,
+      fromLocation: row.fromLocationId ? (mloc.get(row.fromLocationId)?.code ?? null) : null,
+      toLocation: row.toLocationId ? (mloc.get(row.toLocationId)?.code ?? null) : null,
+      fromStatus: row.fromStatus,
+      toStatus: row.toStatus,
+      quantity: f3(row.quantity),
+      referenceType: row.referenceType,
+      referenceId: row.referenceId,
+      reversesTxId: row.reversesTxId ? String(row.reversesTxId) : null,
+      reversedByTxId: reversedBy.get(String(row.id)) ?? null,
+      actor: row.actorId ? (mu.get(row.actorId)?.fullName ?? null) : 'System',
+      occurredAt: row.occurredAt.toISOString(),
     }));
   }
 
@@ -191,9 +191,9 @@ export class InventoryQueryService implements OnModuleInit {
       orderBy: { code: 'asc' },
       take: 500,
     });
-    const snaps = await Promise.all(hus.map((h) => this.events.palletSnapshot(this.prisma, h.id)));
-    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: hus.map((h) => h.locationId).filter((x): x is string => !!x) } } })).map((l) => [l.id, l.code]));
-    return snaps.filter(Boolean).map((s) => ({ ...s!, locationCode: s!.position?.locationId ? (locs.get(s!.position.locationId) ?? null) : null }));
+    const snaps = await Promise.all(hus.map((handlingUnit) => this.events.palletSnapshot(this.prisma, handlingUnit.id)));
+    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: hus.map((handlingUnit) => handlingUnit.locationId).filter((locationId): locationId is string => !!locationId) } } })).map((location) => [location.id, location.code]));
+    return snaps.filter(Boolean).map((snapshot) => ({ ...snapshot!, locationCode: snapshot!.position?.locationId ? (locs.get(snapshot!.position.locationId) ?? null) : null }));
   }
 
   async pallet(siteId: string, huId: string): Promise<HandlingUnitDetail> {
@@ -209,15 +209,15 @@ export class InventoryQueryService implements OnModuleInit {
       location: loc ? { id: loc.id, code: loc.code, type: loc.locationType, name: loc.name } : null,
       position: hu.positionSource ? { source: hu.positionSource, confirmedAt: (hu.positionConfirmedAt ?? hu.updatedAt).toISOString() } : null,
       grossWeightKg: hu.grossWeightKg !== null ? Number(hu.grossWeightKg) : null,
-      contents: balances.map((b) => ({
-        balanceId: b.id,
-        sku: { id: b.sku.id, code: b.sku.code, name: b.sku.name, baseUom: b.sku.baseUom, category: (b.sku as { category?: string | null }).category ?? null },
-        lotNumber: b.lot?.lotNumber ?? null,
-        receivedAt: b.receivedAt?.toISOString() ?? null,
-        expiresOn: b.lot?.expiresOn?.toISOString().slice(0, 10) ?? null,
-        stockStatus: b.stockStatus,
-        qtyOnHand: f3(b.qtyOnHand),
-        qtyReserved: f3(b.qtyReserved),
+      contents: balances.map((balance) => ({
+        balanceId: balance.id,
+        sku: { id: balance.sku.id, code: balance.sku.code, name: balance.sku.name, baseUom: balance.sku.baseUom, category: (balance.sku as { category?: string | null }).category ?? null },
+        lotNumber: balance.lot?.lotNumber ?? null,
+        receivedAt: balance.receivedAt?.toISOString() ?? null,
+        expiresOn: balance.lot?.expiresOn?.toISOString().slice(0, 10) ?? null,
+        stockStatus: balance.stockStatus,
+        qtyOnHand: f3(balance.qtyOnHand),
+        qtyReserved: f3(balance.qtyReserved),
       })),
       version: hu.version,
     };
@@ -227,45 +227,45 @@ export class InventoryQueryService implements OnModuleInit {
   async palletHistory(siteId: string, huId: string): Promise<HuHistoryEntry[]> {
     const ledger = await this.transactions(siteId, { huId, limit: 200 });
     const moves = await this.prisma.movementRecord.findMany({ where: { subjectType: 'HANDLING_UNIT', subjectId: huId }, orderBy: { occurredAt: 'desc' } });
-    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: moves.flatMap((m) => [m.fromLocationId, m.toLocationId]).filter((x): x is string => !!x) } } })).map((l) => [l.id, l.code]));
-    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: moves.map((m) => m.actorId).filter((x): x is string => !!x) } } })).map((u) => [u.id, u.fullName]));
+    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: moves.flatMap((move) => [move.fromLocationId, move.toLocationId]).filter((locationId): locationId is string => !!locationId) } } })).map((location) => [location.id, location.code]));
+    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: moves.map((move) => move.actorId).filter((actorId): actorId is string => !!actorId) } } })).map((user) => [user.id, user.fullName]));
     return [
-      ...ledger.map((t) => ({ at: t.occurredAt, kind: 'LEDGER' as const, description: `${t.txType} ${t.quantity} ${t.sku.code}${t.lotNumber ? ` · ${t.lotNumber}` : ''}`, from: t.fromLocation, to: t.toLocation, source: null, actor: t.actor })),
-      ...moves.map((m) => ({
-        at: m.occurredAt.toISOString(),
+      ...ledger.map((ledgerEntry) => ({ at: ledgerEntry.occurredAt, kind: 'LEDGER' as const, description: `${ledgerEntry.txType} ${ledgerEntry.quantity} ${ledgerEntry.sku.code}${ledgerEntry.lotNumber ? ` · ${ledgerEntry.lotNumber}` : ''}`, from: ledgerEntry.fromLocation, to: ledgerEntry.toLocation, source: null, actor: ledgerEntry.actor })),
+      ...moves.map((move) => ({
+        at: move.occurredAt.toISOString(),
         kind: 'MOVEMENT' as const,
-        description: m.reason,
-        from: m.fromLocationId ? (locs.get(m.fromLocationId) ?? null) : null,
-        to: m.toLocationId ? (locs.get(m.toLocationId) ?? null) : null,
-        source: m.positionSource,
-        actor: m.actorId ? (users.get(m.actorId) ?? null) : 'System',
+        description: move.reason,
+        from: move.fromLocationId ? (locs.get(move.fromLocationId) ?? null) : null,
+        to: move.toLocationId ? (locs.get(move.toLocationId) ?? null) : null,
+        source: move.positionSource,
+        actor: move.actorId ? (users.get(move.actorId) ?? null) : 'System',
       })),
-    ].sort((a, b) => b.at.localeCompare(a.at));
+    ].sort((left, right) => right.at.localeCompare(left.at));
   }
 
   async adjustments(siteId: string, status?: string): Promise<AdjustmentDto[]> {
     const rows = await this.prisma.stockAdjustment.findMany({ where: { siteId, ...(status ? { status: status as AdjustmentDto['status'] } : {}) }, orderBy: { createdAt: 'desc' }, take: 200 });
     const balances = new Map(
-      (await this.withRefs(await this.prisma.inventoryBalance.findMany({ where: { id: { in: rows.map((r) => r.balanceId) } } }))).map((b) => [b.id, this.balanceDto(b)]),
+      (await this.withRefs(await this.prisma.inventoryBalance.findMany({ where: { id: { in: rows.map((row) => row.balanceId) } } }))).map((balance) => [balance.id, this.balanceDto(balance)]),
     );
-    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: rows.flatMap((r) => [r.requestedById, r.approvedById]).filter((x): x is string => !!x) } } })).map((u) => [u.id, u]));
+    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: rows.flatMap((row) => [row.requestedById, row.approvedById]).filter((userId): userId is string => !!userId) } } })).map((user) => [user.id, user]));
     return rows
-      .filter((r) => balances.has(r.balanceId))
-      .map((r) => ({
-        id: r.id,
-        code: r.code,
-        balance: balances.get(r.balanceId)!,
-        qtyDelta: new D(r.qtyDelta).toFixed(3),
-        reasonCode: r.reasonCode,
-        note: r.note,
-        status: r.status,
-        requiresManager: r.requiresManager,
-        requestedBy: { id: r.requestedById, fullName: users.get(r.requestedById)?.fullName ?? '' },
-        approvedBy: r.approvedById ? { id: r.approvedById, fullName: users.get(r.approvedById)?.fullName ?? '' } : null,
-        decidedAt: r.decidedAt?.toISOString() ?? null,
-        decisionNote: r.decisionNote,
-        createdAt: r.createdAt.toISOString(),
-        version: r.version,
+      .filter((row) => balances.has(row.balanceId))
+      .map((row) => ({
+        id: row.id,
+        code: row.code,
+        balance: balances.get(row.balanceId)!,
+        qtyDelta: new Decimal(row.qtyDelta).toFixed(3),
+        reasonCode: row.reasonCode,
+        note: row.note,
+        status: row.status,
+        requiresManager: row.requiresManager,
+        requestedBy: { id: row.requestedById, fullName: users.get(row.requestedById)?.fullName ?? '' },
+        approvedBy: row.approvedById ? { id: row.approvedById, fullName: users.get(row.approvedById)?.fullName ?? '' } : null,
+        decidedAt: row.decidedAt?.toISOString() ?? null,
+        decisionNote: row.decisionNote,
+        createdAt: row.createdAt.toISOString(),
+        version: row.version,
       }));
   }
 }

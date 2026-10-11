@@ -15,29 +15,29 @@ const TONE: Record<string, string> = { CRITICAL: 'bg-bad text-white', HIGH: 'bg-
 /** Chuông thông báo (dropdown Radix) in-app (FR-18.01): danh sách, đếm chưa đọc, nhận realtime qua room user:{id}. */
 export function NotificationBell({ timeZone }: { timeZone?: string }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState<NotificationCreated | null>(null);
   const { data } = useQuery({ queryKey: ['notifications'], queryFn: () => api<NotificationList>('/notifications'), refetchInterval: 60_000 });
-  const read = useMutation({ mutationFn: (id: string) => api(`/notifications/${id}/read`, { method: 'POST', body: {} }), onSuccess: () => void qc.invalidateQueries({ queryKey: ['notifications'] }) });
-  const readAll = useMutation({ mutationFn: () => api('/notifications/read-all', { method: 'POST', body: {} }), onSuccess: () => void qc.invalidateQueries({ queryKey: ['notifications'] }) });
+  const read = useMutation({ mutationFn: (id: string) => api(`/notifications/${id}/read`, { method: 'POST', body: {} }), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['notifications'] }) });
+  const readAll = useMutation({ mutationFn: () => api('/notifications/read-all', { method: 'POST', body: {} }), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['notifications'] }) });
 
   useEffect(() => {
-    const s = getSocket();
+    const socket = getSocket();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const onCreated = (p: NotificationCreated) => {
-      void qc.invalidateQueries({ queryKey: ['notifications'] });
-      setToast(p);
+    const onCreated = (notification: NotificationCreated) => {
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      setToast(notification);
       clearTimeout(timer);
       timer = setTimeout(() => setToast(null), 6000);
     };
-    s.on('notification.created', onCreated);
+    socket.on('notification.created', onCreated);
     return () => {
-      s.off('notification.created', onCreated);
+      socket.off('notification.created', onCreated);
       clearTimeout(timer);
     };
-  }, [qc]);
+  }, [queryClient]);
 
   const go = (id: string, link: string | null) => {
     read.mutate(id);
@@ -59,28 +59,28 @@ export function NotificationBell({ timeZone }: { timeZone?: string }) {
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
               <span className="font-semibold">{t('notifications.title')}</span>
               {unread > 0 ? (
-                <button className="flex items-center gap-1 text-xs font-medium text-brand hover:underline" onClick={(e) => (e.preventDefault(), readAll.mutate())}>
+                <button className="flex items-center gap-1 text-xs font-medium text-brand hover:underline" onClick={(event) => (event.preventDefault(), readAll.mutate())}>
                   <CheckCheck size={14} /> {t('notifications.readAll')}
                 </button>
               ) : null}
             </div>
             <div className="max-h-[420px] overflow-auto">
               {data?.items.length ? null : <p className="p-6 text-center text-sm text-muted">{t('notifications.empty')}</p>}
-              {data?.items.map((n) => {
-                const Icon = ICON[n.category as keyof typeof ICON] ?? Info;
+              {data?.items.map((notification) => {
+                const Icon = ICON[notification.category as keyof typeof ICON] ?? Info;
                 return (
-                  <Menu.Item key={n.id} onSelect={() => go(n.id, n.link)} className={cn('flex w-full gap-3 border-b border-line/60 px-4 py-3 text-left cursor-pointer outline-none hover:bg-slate-50 data-[highlighted]:bg-slate-50', !n.readAt && 'bg-brand-soft/30')}>
-                    <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', TONE[n.severity])}>
+                  <Menu.Item key={notification.id} onSelect={() => go(notification.id, notification.link)} className={cn('flex w-full gap-3 border-b border-line/60 px-4 py-3 text-left cursor-pointer outline-none hover:bg-slate-50 data-[highlighted]:bg-slate-50', !notification.readAt && 'bg-brand-soft/30')}>
+                    <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', TONE[notification.severity])}>
                       <Icon size={15} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{n.title}</span>
-                      {n.body ? <span className="block truncate text-xs text-muted">{n.body}</span> : null}
+                      <span className="block truncate text-sm font-semibold">{notification.title}</span>
+                      {notification.body ? <span className="block truncate text-xs text-muted">{notification.body}</span> : null}
                       <span className="block text-[11px] text-muted">
-                        {n.siteCode} · {formatDateTime(n.createdAt, timeZone)}
+                        {notification.siteCode} · {formatDateTime(notification.createdAt, timeZone)}
                       </span>
                     </span>
-                    {!n.readAt ? <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-brand" /> : null}
+                    {!notification.readAt ? <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-brand" /> : null}
                   </Menu.Item>
                 );
               })}

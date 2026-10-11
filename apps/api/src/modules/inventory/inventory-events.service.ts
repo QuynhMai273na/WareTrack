@@ -11,14 +11,14 @@ export class InventoryEvents {
 
   async inventoryUpdated(tx: Tx, siteId: string, changes: BalanceChange[], txIds: bigint[]) {
     if (changes.length === 0) return;
-    const skus = new Map((await tx.sku.findMany({ where: { id: { in: [...new Set(changes.map((c) => c.skuId))] } } })).map((s) => [s.id, s.code]));
+    const skus = new Map((await tx.sku.findMany({ where: { id: { in: [...new Set(changes.map((change) => change.skuId))] } } })).map((sku) => [sku.id, sku.code]));
     await this.outbox.publish(tx, {
       siteId,
       type: 'inventory.updated',
       aggregateType: 'Inventory',
       aggregateId: siteId,
-      aggregateVersion: Math.max(...changes.map((c) => c.balanceVersion)),
-      data: { changes: changes.map((c) => ({ ...c, skuCode: skus.get(c.skuId) ?? null })), txIds: txIds.map(String) },
+      aggregateVersion: Math.max(...changes.map((change) => change.balanceVersion)),
+      data: { changes: changes.map((change) => ({ ...change, skuCode: skus.get(change.skuId) ?? null })), txIds: txIds.map(String) },
     });
   }
 

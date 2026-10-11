@@ -113,8 +113,8 @@ export class OperationsController {
   @Post('exceptions')
   @RequirePermission('exception.create')
   async createException(@Param('siteId') siteId: string, @Body() body: CreateExceptionDto) {
-    const c = await this.exceptions.create(siteId, body);
-    return (await this.exceptions.list(siteId)).find((x) => x.id === c.id);
+    const created = await this.exceptions.create(siteId, body);
+    return (await this.exceptions.list(siteId)).find((exceptionCase) => exceptionCase.id === created.id);
   }
 
   @Post('exceptions/:caseId/assign')
@@ -122,7 +122,7 @@ export class OperationsController {
   @HttpCode(200)
   async assignException(@Param('siteId') siteId: string, @Param('caseId') id: string, @Body() body: ExceptionVersionDto) {
     await this.exceptions.transition(siteId, id, 'IN_REVIEW', body);
-    return (await this.exceptions.list(siteId)).find((x) => x.id === id);
+    return (await this.exceptions.list(siteId)).find((exceptionCase) => exceptionCase.id === id);
   }
 
   @Post('exceptions/:caseId/resolve')
@@ -130,7 +130,7 @@ export class OperationsController {
   @HttpCode(200)
   async resolve(@Param('siteId') siteId: string, @Param('caseId') id: string, @Body() body: ResolveDto) {
     await this.exceptions.transition(siteId, id, 'RESOLVED', body);
-    return (await this.exceptions.list(siteId)).find((x) => x.id === id);
+    return (await this.exceptions.list(siteId)).find((exceptionCase) => exceptionCase.id === id);
   }
 
   @Post('exceptions/:caseId/reject')
@@ -138,6 +138,6 @@ export class OperationsController {
   @HttpCode(200)
   async rejectException(@Param('siteId') siteId: string, @Param('caseId') id: string, @Body() body: ExceptionVersionDto) {
     await this.exceptions.transition(siteId, id, 'REJECTED', body);
-    return (await this.exceptions.list(siteId)).find((x) => x.id === id);
+    return (await this.exceptions.list(siteId)).find((exceptionCase) => exceptionCase.id === id);
   }
 }

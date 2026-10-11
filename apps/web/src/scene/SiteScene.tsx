@@ -23,11 +23,11 @@ function SunLight({ center, half }: { center: { x: number; z: number }; half: nu
   const ref = useRef<DirectionalLight>(null);
   const { x, z } = center;
   useEffect(() => {
-    const l = ref.current;
-    if (!l) return;
-    l.target.position.set(x, 0, z);
-    l.target.updateMatrixWorld();
-    l.shadow.camera.updateProjectionMatrix();
+    const light = ref.current;
+    if (!light) return;
+    light.target.position.set(x, 0, z);
+    light.target.updateMatrixWorld();
+    light.shadow.camera.updateProjectionMatrix();
   }, [x, z, half]);
   return (
     <directionalLight
@@ -63,23 +63,23 @@ const SiteOnMap = memo(function SiteOnMap({ site, index }: { site: NetworkSite; 
 function SiteTags({ sites, indexes, currentSiteId, onPick }: { sites: NetworkSite[]; indexes: Map<string, LayoutIndex>; currentSiteId: string; onPick?: (code: string) => void }) {
   const [visible, setVisible] = useState(false);
   useFrame(({ camera }) => {
-    const v = (camera as { zoom: number }).zoom < 9;
-    if (v !== visible) setVisible(v);
+    const isZoomedOut = (camera as { zoom: number }).zoom < 9;
+    if (isZoomedOut !== visible) setVisible(isZoomedOut);
   });
   if (!visible) return null;
   return (
     <>
-      {sites.map((s) => {
-        const ix = indexes.get(s.siteId);
+      {sites.map((site) => {
+        const ix = indexes.get(site.siteId);
         if (!ix) return null;
         return (
-          <Html key={s.siteId} position={[s.offset.x + ix.center.x, 24, s.offset.z + ix.center.z]} center zIndexRange={[20, 0]}>
+          <Html key={site.siteId} position={[site.offset.x + ix.center.x, 24, site.offset.z + ix.center.z]} center zIndexRange={[20, 0]}>
             <button
-              onClick={() => onPick?.(s.code)}
-              className={`flex items-center gap-2 whitespace-nowrap rounded-xl border bg-white/95 py-1 pl-1 pr-3 text-sm font-semibold shadow-md transition hover:-translate-y-0.5 ${s.siteId === currentSiteId ? 'border-brand' : 'border-line'}`}
+              onClick={() => onPick?.(site.code)}
+              className={`flex items-center gap-2 whitespace-nowrap rounded-xl border bg-white/95 py-1 pl-1 pr-3 text-sm font-semibold shadow-md transition hover:-translate-y-0.5 ${site.siteId === currentSiteId ? 'border-brand' : 'border-line'}`}
             >
-              <span className="rounded-lg bg-brand px-1.5 py-1 text-[11px] font-bold text-white">{s.code}</span>
-              {s.name}
+              <span className="rounded-lg bg-brand px-1.5 py-1 text-[11px] font-bold text-white">{site.code}</span>
+              {site.name}
             </button>
           </Html>
         );
@@ -106,18 +106,18 @@ export function SiteScene({
   onLowFps?: () => void;
   framing?: CameraFraming;
 }) {
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const [dpr, setDpr] = useState(1.5);
-  const layoutsKey = sites.map((s) => `${s.siteId}:${s.layout.versionId}`).join('|');
+  const layoutsKey = sites.map((site) => `${site.siteId}:${site.layout.versionId}`).join('|');
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const indexes = useMemo(() => new Map(sites.map((s) => [s.siteId, indexLayout(s.layout)])), [layoutsKey]);
-  const current = sites.find((s) => s.siteId === currentSiteId) ?? sites[0];
+  const indexes = useMemo(() => new Map(sites.map((site) => [site.siteId, indexLayout(site.layout)])), [layoutsKey]);
+  const current = sites.find((site) => site.siteId === currentSiteId) ?? sites[0];
   const currentIndex = current ? indexes.get(current.siteId) : undefined;
-  const network = useMemo(() => sites.map((s) => ({ layout: indexes.get(s.siteId)!, offset: s.offset })).filter((n) => n.layout), [sites, indexes]);
+  const network = useMemo(() => sites.map((site) => ({ layout: indexes.get(site.siteId)!, offset: site.offset })).filter((networkEntry) => networkEntry.layout), [sites, indexes]);
   if (!current || !currentIndex) return null;
-  const b = currentIndex.bounds;
+  const bounds = currentIndex.bounds;
   const center = { x: current.offset.x + currentIndex.center.x, z: current.offset.z + currentIndex.center.z };
-  const half = Math.max(b.maxX - b.minX, b.maxZ - b.minZ) / 2 + 30;
+  const half = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2 + 30;
   return (
     <Canvas
       shadows="soft"
@@ -143,9 +143,9 @@ export function SiteScene({
           <planeGeometry args={[6000, 6000]} />
           <meshStandardMaterial color="#eceef8" roughness={1} />
         </mesh>
-        {sites.map((s) => {
-          const index = indexes.get(s.siteId);
-          return index ? <SiteOnMap key={s.siteId} site={s} index={index} /> : null;
+        {sites.map((site) => {
+          const index = indexes.get(site.siteId);
+          return index ? <SiteOnMap key={site.siteId} site={site} index={index} /> : null;
         })}
         <SelectionBracket />
         {sites.length > 1 ? <SiteTags sites={sites} indexes={indexes} currentSiteId={currentSiteId} onPick={onPickSite} /> : null}

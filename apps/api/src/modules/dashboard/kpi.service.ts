@@ -57,8 +57,8 @@ export class KpiService implements OnModuleInit {
               data: { kpis, asOf: new Date().toISOString() },
             }),
           );
-        } catch (e) {
-          this.log.warn(`KPI broadcast for site ${siteId} skipped: ${(e as Error).message.trim().split('\n').pop()}`);
+        } catch (error) {
+          this.log.warn(`KPI broadcast for site ${siteId} skipped: ${(error as Error).message.trim().split('\n').pop()}`);
         }
       }, DEBOUNCE_MS),
     );
@@ -90,13 +90,13 @@ export class KpiService implements OnModuleInit {
     // K-04a Dock utilization tức thời
     const docks = await this.prisma.location.findMany({ where: { siteId, locationType: 'DOCK', deletedAt: null, isActive: true } });
     const occ = await this.occupancy.activeByLocations(siteId);
-    const docksAvailableTotal = docks.filter((d) => !d.blockedAt).length;
-    const docksOccupied = docks.filter((d) => (occ.get(d.id) ?? []).some((o) => o.kind === 'OCCUPIED')).length;
+    const docksAvailableTotal = docks.filter((dock) => !dock.blockedAt).length;
+    const docksOccupied = docks.filter((dock) => (occ.get(dock.id) ?? []).some((occupancy) => occupancy.kind === 'OCCUPIED')).length;
 
     // K-02 Yard occupancy — ô đỗ xe lưu bãi (parking slots), loại slot bị block khỏi mẫu số
     const slots = await this.prisma.location.findMany({ where: { siteId, locationType: 'PARKING_SLOT', deletedAt: null, isActive: true } });
-    const slotsActive = slots.filter((s) => !s.blockedAt);
-    const slotsUsed = slotsActive.filter((s) => (occ.get(s.id) ?? []).length > 0).length;
+    const slotsActive = slots.filter((slot) => !slot.blockedAt);
+    const slotsUsed = slotsActive.filter((slot) => (occ.get(slot.id) ?? []).length > 0).length;
 
     // K-07 Outbound today — xe tải xuất đã rời site hôm nay (không tính visit abort)
     const outboundToday = await this.prisma.truckVisit.count({
@@ -105,11 +105,11 @@ export class KpiService implements OnModuleInit {
 
     // K-09 Forklift availability
     const forklifts = await this.prisma.equipment.findMany({ where: { siteId, deletedAt: null, equipmentType: 'FORKLIFT' } });
-    const fleet = forklifts.filter((f) => f.status !== 'OFFLINE').length;
-    const working = forklifts.filter((f) => f.status === 'ASSIGNED' || f.status === 'BUSY').length;
-    const available = forklifts.filter((f) => f.status === 'AVAILABLE').length;
+    const fleet = forklifts.filter((forklift) => forklift.status !== 'OFFLINE').length;
+    const working = forklifts.filter((forklift) => forklift.status === 'ASSIGNED' || forklift.status === 'BUSY').length;
+    const available = forklifts.filter((forklift) => forklift.status === 'AVAILABLE').length;
 
-    const pct = (a: number, b: number) => (b === 0 ? null : Math.round((a / b) * 1000) / 10);
+    const pct = (numerator: number, denominator: number) => (denominator === 0 ? null : Math.round((numerator / denominator) * 1000) / 10);
 
     const kpis: KpiDto[] = [
       { key: 'TRUCKS_ON_SITE', value: onSite, unit: 'trucks', sub: { arriving, docked, inbound }, delta: arrivedLastHour, deltaPeriod: 'last hour', asOf },
@@ -118,7 +118,7 @@ export class KpiService implements OnModuleInit {
       { key: 'OUTBOUND_TODAY', value: outboundToday, unit: 'trucks', deltaPeriod: 'today', asOf },
       { key: 'FORKLIFT_AVAILABILITY', value: pct(working + available, fleet), unit: '%', total: fleet, sub: { working, available }, asOf },
     ];
-    for (const c of this.contributors.kpis) kpis.push(...(await c(siteId, { todayStart, now })));
+    for (const contributor of this.contributors.kpis) kpis.push(...(await contributor(siteId, { todayStart, now })));
     return kpis;
   }
 }

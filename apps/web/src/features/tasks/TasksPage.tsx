@@ -20,29 +20,29 @@ type Action = 'assign' | 'source' | 'destination' | 'short' | 'block' | 'cancel'
 
 function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: TaskDto; action: Action; onClose: () => void }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
-  const me = useAuth((s) => s.me);
-  const can = useAuth((s) => s.can);
+  const queryClient = useQueryClient();
+  const me = useAuth((state) => state.me);
+  const can = useAuth((state) => state.can);
   const { data: equipment } = useEquipment(siteId);
   const { data: users } = useQuery({
     queryKey: ['users'],
-    queryFn: () => api<{ items: Array<{ id: string; fullName: string; siteRoles: Array<{ roleCode: string; siteId: string | null }> }> }>('/users').then((r) => r.items),
+    queryFn: () => api<{ items: Array<{ id: string; fullName: string; siteRoles: Array<{ roleCode: string; siteId: string | null }> }> }>('/users').then((response) => response.items),
     enabled: action === 'assign' && can(undefined, 'identity.user.read'),
   });
   const [assignee, setAssignee] = useState(me?.user.id ?? '');
-  const [eq, setEq] = useState('');
+  const [equipmentId, setEquipmentId] = useState('');
   const [loc, setLoc] = useState('');
   const [subject, setSubject] = useState('');
   const [qty, setQty] = useState('');
   const [reason, setReason] = useState('');
   const [key] = useState(() => crypto.randomUUID());
-  const m = useMutation({
+  const actionMutation = useMutation({
     mutationFn: () => {
       const base = `/sites/${siteId}/tasks/${task.id}`;
       const opts = { method: 'POST' as const, idempotencyKey: key };
       switch (action) {
         case 'assign':
-          return api(`${base}/assign`, { ...opts, body: { assigneeId: assignee, ...(eq ? { equipmentId: eq } : {}), expectedVersion: task.version } });
+          return api(`${base}/assign`, { ...opts, body: { assigneeId: assignee, ...(equipmentId ? { equipmentId: equipmentId } : {}), expectedVersion: task.version } });
         case 'source':
           return api(`${base}/confirm-source`, { ...opts, body: { locationScan: loc, subjectScan: subject } });
         case 'destination':
@@ -56,34 +56,34 @@ function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: T
       }
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['site', siteId] });
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId] });
       onClose();
     },
   });
-  const operators = users?.filter((u) => u.siteRoles.some((r) => (r.siteId === siteId || r.siteId === null) && ['FORKLIFT_OPERATOR', 'WAREHOUSE_OPERATOR', 'WAREHOUSE_SUPERVISOR', 'YARD_DISPATCHER'].includes(r.roleCode)));
+  const operators = users?.filter((user) => user.siteRoles.some((siteRole) => (siteRole.siteId === siteId || siteRole.siteId === null) && ['FORKLIFT_OPERATOR', 'WAREHOUSE_OPERATOR', 'WAREHOUSE_SUPERVISOR', 'YARD_DISPATCHER'].includes(siteRole.roleCode)));
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={`${t(`tasks.actions.${action}`)} · ${task.code}`} description={`${t(`tasks.type.${task.taskType}`)} · ${task.subject.code}${task.subject.label ? ` · ${task.subject.label}` : ''}`}>
-      <form className="space-y-3" onSubmit={(e) => (e.preventDefault(), m.mutate())}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={`${t(`tasks.actions.${action}`)} · ${task.code}`} description={`${t(`tasks.type.${task.taskType}`)} · ${task.subject.code}${task.subject.label ? ` · ${task.subject.label}` : ''}`}>
+      <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), actionMutation.mutate())}>
         {action === 'assign' ? (
           <>
             <div>
               <Label>{t('tasks.assignee')}</Label>
-              <Select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+              <Select value={assignee} onChange={(event) => setAssignee(event.target.value)}>
                 <option value={me?.user.id}>{me?.user.fullName} (me)</option>
-                {operators?.filter((u) => u.id !== me?.user.id).map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.fullName}
+                {operators?.filter((user) => user.id !== me?.user.id).map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.fullName}
                   </option>
                 ))}
               </Select>
             </div>
             <div>
               <Label>{t('ops.forklifts')}</Label>
-              <Select value={eq} onChange={(e) => setEq(e.target.value)}>
+              <Select value={equipmentId} onChange={(event) => setEquipmentId(event.target.value)}>
                 <option value="">—</option>
-                {equipment?.map((x) => (
-                  <option key={x.id} value={x.id} disabled={x.status !== 'AVAILABLE'}>
-                    {x.code} · {t(`status.${x.status}`)} {x.batteryPct !== null ? `· ${x.batteryPct}%` : ''}
+                {equipment?.map((forklift) => (
+                  <option key={forklift.id} value={forklift.id} disabled={forklift.status !== 'AVAILABLE'}>
+                    {forklift.code} · {t(`status.${forklift.status}`)} {forklift.batteryPct !== null ? `· ${forklift.batteryPct}%` : ''}
                   </option>
                 ))}
               </Select>
@@ -102,7 +102,7 @@ function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: T
               <Label>
                 {t('tasks.scanPallet')} — {task.subject.code}
               </Label>
-              <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder={task.subject.code} />
+              <Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={task.subject.code} />
             </div>
           </>
         ) : null}
@@ -117,21 +117,21 @@ function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: T
         {action === 'short' ? (
           <div>
             <Label>{t('tasks.pickedQty')}</Label>
-            <Input value={qty} onChange={(e) => setQty(e.target.value)} required pattern="\d+(\.\d{1,3})?" />
+            <Input value={qty} onChange={(event) => setQty(event.target.value)} required pattern="\d+(\.\d{1,3})?" />
           </div>
         ) : null}
         {['short', 'block', 'cancel'].includes(action) ? (
           <div>
             <Label>{t('yard.reason')}</Label>
-            <Input value={reason} onChange={(e) => setReason(e.target.value)} required minLength={3} />
+            <Input value={reason} onChange={(event) => setReason(event.target.value)} required minLength={3} />
           </div>
         ) : null}
-        {m.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(m.error)}</p> : null}
+        {actionMutation.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(actionMutation.error)}</p> : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={m.isPending} variant={action === 'cancel' ? 'danger' : 'default'}>
+          <Button type="submit" disabled={actionMutation.isPending} variant={action === 'cancel' ? 'danger' : 'default'}>
             {t('common.confirm')}
           </Button>
         </div>
@@ -144,16 +144,16 @@ function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: T
 export function TasksPage() {
   const { t } = useTranslation();
   const { siteId, timeZone } = useSiteContext();
-  const can = useAuth((s) => s.can);
-  const me = useAuth((s) => s.me);
+  const can = useAuth((state) => state.can);
+  const me = useAuth((state) => state.me);
   const [scope, setScope] = useState<'open' | 'mine' | 'done'>('open');
   const filter = scope === 'mine' ? 'assigneeId=me&status=ASSIGNED,IN_PROGRESS,BLOCKED' : scope === 'open' ? 'status=PENDING,ASSIGNED,IN_PROGRESS,BLOCKED' : 'status=COMPLETED,CANCELLED';
   const { data: tasks } = useTasks(siteId, filter);
   const [dialog, setDialog] = useState<{ task: TaskDto; action: Action } | null>(null);
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const start = useMutation({
     mutationFn: (task: TaskDto) => api(`/sites/${siteId}/tasks/${task.id}/start`, { method: 'POST', body: { expectedVersion: task.version } }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['site', siteId] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['site', siteId] }),
     onError: (err) => window.alert(describeError(err)),
   });
 
@@ -162,9 +162,9 @@ export function TasksPage() {
       <div className="card mx-auto max-w-6xl p-4">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <h2 className="mr-auto text-lg font-bold">{t('nav.tasks')}</h2>
-          {(['open', 'mine', 'done'] as const).map((s) => (
-            <Button key={s} size="sm" variant={scope === s ? 'default' : 'outline'} onClick={() => setScope(s)}>
-              {t(`tasks.scope.${s}`)}
+          {(['open', 'mine', 'done'] as const).map((scopeOption) => (
+            <Button key={scopeOption} size="sm" variant={scope === scopeOption ? 'default' : 'outline'} onClick={() => setScope(scopeOption)}>
+              {t(`tasks.scope.${scopeOption}`)}
             </Button>
           ))}
         </div>

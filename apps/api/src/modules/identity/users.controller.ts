@@ -43,21 +43,21 @@ export class UsersController {
 
   @Get('users')
   @RequirePermission('identity.user.read')
-  async list(@Query('q') q?: string) {
+  async list(@Query('q') query?: string) {
     const users = await this.prisma.user.findMany({
-      where: q ? { OR: [{ username: { contains: q, mode: 'insensitive' } }, { fullName: { contains: q, mode: 'insensitive' } }] } : {},
+      where: query ? { OR: [{ username: { contains: query, mode: 'insensitive' } }, { fullName: { contains: query, mode: 'insensitive' } }] } : {},
       include: { siteRoles: { where: { revokedAt: null }, include: { role: true, site: true } } },
       orderBy: { username: 'asc' },
       take: 200,
     });
     return {
-      items: users.map((u) => ({
-        id: u.id,
-        username: u.username,
-        email: u.email,
-        fullName: u.fullName,
-        status: u.status,
-        siteRoles: u.siteRoles.map((r) => ({ id: r.id, roleCode: r.role.code, siteId: r.siteId, siteCode: r.site?.code ?? null })),
+      items: users.map((user) => ({
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        fullName: user.fullName,
+        status: user.status,
+        siteRoles: user.siteRoles.map((siteRole) => ({ id: siteRole.id, roleCode: siteRole.role.code, siteId: siteRole.siteId, siteCode: siteRole.site?.code ?? null })),
       })),
       nextCursor: null,
     };
@@ -179,11 +179,11 @@ export class UsersController {
   @RequirePermission('identity.user.read')
   async roles() {
     const roles = await this.prisma.role.findMany({ include: { permissions: { include: { permission: true } } }, orderBy: { code: 'asc' } });
-    return roles.map((r) => ({
-      code: r.code,
-      name: r.name,
-      label: ROLE_LABELS[r.code as Role] ?? { vi: r.name, en: r.name },
-      permissions: r.permissions.map((p) => p.permission.code).sort(),
+    return roles.map((role) => ({
+      code: role.code,
+      name: role.name,
+      label: ROLE_LABELS[role.code as Role] ?? { vi: role.name, en: role.name },
+      permissions: role.permissions.map((rolePermission) => rolePermission.permission.code).sort(),
     }));
   }
 }

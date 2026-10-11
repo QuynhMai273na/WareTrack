@@ -40,8 +40,8 @@ export class VehiclesController {
 
   @Get('sites/:siteId/vehicle-stays')
   @RequirePermission('vehicle.read')
-  list(@Param('siteId') siteId: string, @Query('status') status?: string, @Query('q') q?: string) {
-    return this.vehicles.list(siteId, { status, q });
+  list(@Param('siteId') siteId: string, @Query('status') status?: string, @Query('q') query?: string) {
+    return this.vehicles.list(siteId, { status, q: query });
   }
 
   @Post('sites/:siteId/vehicle-stays')

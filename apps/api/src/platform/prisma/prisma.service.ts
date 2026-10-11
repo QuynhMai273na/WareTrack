@@ -42,7 +42,7 @@ export class TxRunner {
         });
       } catch (err) {
         if (err instanceof DomainError || attempt >= maxRetries || !isRetryableDbError(err)) throw err;
-        await new Promise((r) => setTimeout(r, 20 * 2 ** attempt + Math.random() * 20));
+        await new Promise((resolve) => setTimeout(resolve, 20 * 2 ** attempt + Math.random() * 20));
       }
     }
   }

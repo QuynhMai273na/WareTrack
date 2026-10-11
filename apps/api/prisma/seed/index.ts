@@ -14,7 +14,7 @@ import { CARRIERS, EQUIPMENT, OPERATORS, OUTDOOR_PALLETS, PARTNERS, SITE_INVENTO
 const prisma = new PrismaClient();
 const DEMO_PASSWORD = 'WareTrack@2026';
 const now = new Date();
-const minutes = (m: number) => new Date(now.getTime() + m * 60_000);
+const minutes = (offsetMinutes: number) => new Date(now.getTime() + offsetMinutes * 60_000);
 const WITH_VEHICLE_YARD = process.env.SEED_VEHICLE_YARD === 'true';
 
 const SITES: SiteSeed[] = [
@@ -32,7 +32,7 @@ const SITES: SiteSeed[] = [
       ]
     : []),
 ];
-const SITE_CODES = SITES.map((s) => s.code);
+const SITE_CODES = SITES.map((site) => site.code);
 
 const USERS: Array<{ username: string; fullName: string; grants: Array<{ role: Role; sites: string[] | null }> }> = [
   { username: 'admin', fullName: 'Morgan Lee', grants: [{ role: Role.ADMIN, sites: null }] },
@@ -44,21 +44,21 @@ const USERS: Array<{ username: string; fullName: string; grants: Array<{ role: R
   { username: 'forklift', fullName: 'Sam Haddad', grants: [{ role: Role.FORKLIFT_OPERATOR, sites: ['WH-01'] }] },
   { username: 'inventory', fullName: 'Riley Pham', grants: [{ role: Role.INVENTORY_CONTROLLER, sites: ['WH-01', 'WH-02'] }] },
   { username: 'viewer', fullName: 'Avery Do', grants: [{ role: Role.VIEWER, sites: ['WH-01', 'WH-02', 'WH-03', 'WH-04', 'WH-05'] }] },
-  ...OPERATORS.map((o) => ({ username: o.username, fullName: o.fullName, grants: [{ role: Role.FORKLIFT_OPERATOR, sites: [o.site] }] })),
+  ...OPERATORS.map((operator) => ({ username: operator.username, fullName: operator.fullName, grants: [{ role: Role.FORKLIFT_OPERATOR, sites: [operator.site] }] })),
 ];
 
 type SiteRef = { id: string; locationIds: Map<string, string> };
 
 async function chunked<T>(rows: T[], fn: (batch: T[]) => Promise<unknown>, size = 1000) {
-  for (let i = 0; i < rows.length; i += size) await fn(rows.slice(i, i + size));
+  for (let offset = 0; offset < rows.length; offset += size) await fn(rows.slice(offset, offset + size));
 }
 
 /** Đầu ngày theo giờ New York (timezone của site demo). */
 function todayStartNy(): Date {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(now);
-  const h = Number(parts.find((p) => p.type === 'hour')!.value) % 24;
-  const m = Number(parts.find((p) => p.type === 'minute')!.value);
-  return new Date(now.getTime() - (h * 60 + m) * 60_000 - now.getSeconds() * 1000);
+  const hour = Number(parts.find((part) => part.type === 'hour')!.value) % 24;
+  const minute = Number(parts.find((part) => part.type === 'minute')!.value);
+  return new Date(now.getTime() - (hour * 60 + minute) * 60_000 - now.getSeconds() * 1000);
 }
 
 /** Số pallet DemoDirector sẽ nhận thêm lúc dựng cảnh (để KPI sau khi dựng khớp video). */
@@ -70,21 +70,21 @@ const DIRECTOR_RECEIPTS: Record<string, number> = { 'WH-02': 1, 'WH-03': 3, 'WH-
  */
 async function seedInventory(sites: Map<string, SiteRef>, userIds: Map<string, string>): Promise<number> {
   const skuIds = new Map<string, string>();
-  for (const s of SKUS) {
+  for (const sku of SKUS) {
     const created = await prisma.sku.create({
-      data: { code: s.code, name: s.name, category: s.category, lotTracked: !!s.lot, expiryTracked: !!s.expiryDays, allocationStrategy: s.expiryDays ? 'FEFO' : 'FIFO', unitWeightKg: s.weight, lowStockThreshold: s.lowStock ?? null },
+      data: { code: sku.code, name: sku.name, category: sku.category, lotTracked: !!sku.lot, expiryTracked: !!sku.expiryDays, allocationStrategy: sku.expiryDays ? 'FEFO' : 'FIFO', unitWeightKg: sku.weight, lowStockThreshold: sku.lowStock ?? null },
     });
-    skuIds.set(s.code, created.id);
+    skuIds.set(sku.code, created.id);
   }
   const lots = new Map<string, string>();
   const lotOf = async (skuCode: string, lotNumber?: string) => {
-    const s = SKUS.find((x) => x.code === skuCode)!;
-    if (!s.lot && !lotNumber) return null;
+    const sku = SKUS.find((skuSeed) => skuSeed.code === skuCode)!;
+    if (!sku.lot && !lotNumber) return null;
     const number = lotNumber ?? `L2509-${100 + (skuCode.length * 37) % 800}`;
     const key = `${skuCode}:${number}`;
     if (!lots.has(key)) {
-      const l = await prisma.lot.create({ data: { skuId: skuIds.get(skuCode)!, lotNumber: number, manufacturedOn: minutes(-60 * 24 * 40), expiresOn: s.expiryDays ? minutes(60 * 24 * (s.expiryDays - 40)) : null } });
-      lots.set(key, l.id);
+      const lot = await prisma.lot.create({ data: { skuId: skuIds.get(skuCode)!, lotNumber: number, manufacturedOn: minutes(-60 * 24 * 40), expiresOn: sku.expiryDays ? minutes(60 * 24 * (sku.expiryDays - 40)) : null } });
+      lots.set(key, lot.id);
     }
     return lots.get(key)!;
   };
@@ -104,41 +104,41 @@ async function seedInventory(sites: Map<string, SiteRef>, userIds: Map<string, s
       if (visibleNo === 1026) visibleNo++;
       return `PAL-${visibleNo++}`;
     };
-    for (const p of OUTDOOR_PALLETS[code] ?? []) {
-      for (let i = 0; i < (p.n ?? 1); i++) {
-        rows.push({ code: p.code ?? nextVisible(), sku: p.sku, qty: p.qty, loc: p.loc, lot: p.lot, receivedAt: p.receivedAt ? new Date(p.receivedAt) : minutes(-60 * 24 * (3 + (i % 9))), lifecycle: p.lifecycle ?? 'IN_STOCK' });
+    for (const pallet of OUTDOOR_PALLETS[code] ?? []) {
+      for (let copyIndex = 0; copyIndex < (pallet.n ?? 1); copyIndex++) {
+        rows.push({ code: pallet.code ?? nextVisible(), sku: pallet.sku, qty: pallet.qty, loc: pallet.loc, lot: pallet.lot, receivedAt: pallet.receivedAt ? new Date(pallet.receivedAt) : minutes(-60 * 24 * (3 + (copyIndex % 9))), lifecycle: pallet.lifecycle ?? 'IN_STOCK' });
       }
     }
     // 2) SKU hiển thị: bù phần còn thiếu bằng pallet trong nhà
-    const indoor = [...site.locationIds.entries()].filter(([c]) => /^[A-Z]-\d{3}$/.test(c)).map(([, id]) => id);
+    const indoor = [...site.locationIds.entries()].filter(([locationCode]) => /^[A-Z]-\d{3}$/.test(locationCode)).map(([, id]) => id);
     let slot = 0;
     const nextIndoor = () => indoor[Math.floor(slot++ / 28) % indoor.length];
     for (const [sku, units] of inv.featured) {
-      let left = units - rows.filter((r) => r.sku === sku).reduce((s, r) => s + r.qty, 0);
-      const per = SKUS.find((s) => s.code === sku)!.perPallet;
+      let left = units - rows.filter((row) => row.sku === sku).reduce((sum, row) => sum + row.qty, 0);
+      const per = SKUS.find((skuSeed) => skuSeed.code === sku)!.perPallet;
       while (left > 0) {
-        const q = Math.min(per, left);
-        rows.push({ code: `PAL-${palletNo++}`, sku, qty: q, loc: nextIndoor(), receivedAt: minutes(-60 * 24 * (2 + (rows.length % 25))), lifecycle: 'IN_STOCK' });
-        left -= q;
+        const quantity = Math.min(per, left);
+        rows.push({ code: `PAL-${palletNo++}`, sku, qty: quantity, loc: nextIndoor(), receivedAt: minutes(-60 * 24 * (2 + (rows.length % 25))), lifecycle: 'IN_STOCK' });
+        left -= quantity;
       }
     }
     // 3) Hàng lấp đầy tới tổng pallet mục tiêu (trừ phần DemoDirector sẽ nhận thêm)
     const target = inv.pallets - (DIRECTOR_RECEIPTS[code] ?? 0);
-    let f = 0;
+    let fillerIndex = 0;
     while (rows.length < target) {
-      const sku = inv.filler[f++ % inv.filler.length];
-      const per = SKUS.find((s) => s.code === sku)!.perPallet;
-      rows.push({ code: `PAL-${palletNo++}`, sku, qty: per, loc: nextIndoor(), receivedAt: minutes(-60 * 24 * (2 + (f % 40))), lifecycle: 'IN_STOCK' });
+      const sku = inv.filler[fillerIndex++ % inv.filler.length];
+      const per = SKUS.find((skuSeed) => skuSeed.code === sku)!.perPallet;
+      rows.push({ code: `PAL-${palletNo++}`, sku, qty: per, loc: nextIndoor(), receivedAt: minutes(-60 * 24 * (2 + (fillerIndex % 40))), lifecycle: 'IN_STOCK' });
     }
     // 4) Pallet nhận hôm nay = put-away hôm nay (KPI "+15 pallets") — trừ phần director nhận thêm
     const todayCount = inv.putawaysToday - (DIRECTOR_RECEIPTS[code] ?? 0);
-    const todayRows = rows.filter((r) => /^[A-Z]-\d{3}$/.test([...site.locationIds.entries()].find(([, id]) => id === r.loc)?.[0] ?? '')).slice(-todayCount);
-    todayRows.forEach((r, i) => {
-      r.today = true;
-      r.receivedAt = new Date(todayStart.getTime() + ((i + 1) / (todayCount + 1)) * sinceToday * 60_000);
+    const todayRows = rows.filter((row) => /^[A-Z]-\d{3}$/.test([...site.locationIds.entries()].find(([, id]) => id === row.loc)?.[0] ?? '')).slice(-todayCount);
+    todayRows.forEach((row, rowIndex) => {
+      row.today = true;
+      row.receivedAt = new Date(todayStart.getTime() + ((rowIndex + 1) / (todayCount + 1)) * sinceToday * 60_000);
     });
 
-    const locId = (l: string) => site.locationIds.get(l) ?? l;
+    const locId = (locationCode: string) => site.locationIds.get(locationCode) ?? locationCode;
     const hu: Prisma.HandlingUnitCreateManyInput[] = [];
     const bal: Prisma.InventoryBalanceCreateManyInput[] = [];
     const tx: Prisma.InventoryTransactionCreateManyInput[] = [];
@@ -146,33 +146,33 @@ async function seedInventory(sites: Map<string, SiteRef>, userIds: Map<string, s
     const mov: Prisma.MovementRecordCreateManyInput[] = [];
     const tasks: Prisma.OperationTaskCreateManyInput[] = [];
     let taskNo = 0;
-    for (const r of rows) {
+    for (const row of rows) {
       const id = uuidv7();
-      const sku = SKUS.find((s) => s.code === r.sku)!;
-      const lotId = await lotOf(r.sku, r.lot);
-      const location = locId(r.loc);
-      hu.push({ id, siteId: site.id, code: r.code, lifecycle: r.lifecycle, locationId: location, positionSource: 'CONFIRMED_SCAN', positionConfirmedAt: r.receivedAt, grossWeightKg: Math.round(r.qty * sku.weight * 0.85 + 22), createdAt: r.receivedAt });
-      bal.push({ siteId: site.id, locationId: location, skuId: skuIds.get(r.sku)!, lotId, handlingUnitId: id, stockStatus: 'AVAILABLE', qtyOnHand: r.qty, receivedAt: r.receivedAt });
-      tx.push({ siteId: site.id, txType: 'RECEIPT', idempotencyKey: `seed:${code}:${r.code}`, skuId: skuIds.get(r.sku)!, lotId, handlingUnitId: id, toLocationId: location, toStatus: 'AVAILABLE', quantity: r.qty, referenceType: 'SEED', referenceId: id, occurredAt: r.receivedAt });
-      occ.push({ siteId: site.id, locationId: location, occupantType: 'HANDLING_UNIT', occupantId: id, kind: 'OCCUPIED', singleOccupancy: false, occupiedAt: r.receivedAt, positionSource: 'CONFIRMED_SCAN', startedAt: r.receivedAt });
-      mov.push({ siteId: site.id, subjectType: 'HANDLING_UNIT', subjectId: id, toLocationId: location, positionSource: 'CONFIRMED_SCAN', reason: r.today ? 'Put-away' : 'Initial stock (seed)', occurredAt: r.receivedAt });
-      if (r.today) {
+      const sku = SKUS.find((skuSeed) => skuSeed.code === row.sku)!;
+      const lotId = await lotOf(row.sku, row.lot);
+      const location = locId(row.loc);
+      hu.push({ id, siteId: site.id, code: row.code, lifecycle: row.lifecycle, locationId: location, positionSource: 'CONFIRMED_SCAN', positionConfirmedAt: row.receivedAt, grossWeightKg: Math.round(row.qty * sku.weight * 0.85 + 22), createdAt: row.receivedAt });
+      bal.push({ siteId: site.id, locationId: location, skuId: skuIds.get(row.sku)!, lotId, handlingUnitId: id, stockStatus: 'AVAILABLE', qtyOnHand: row.qty, receivedAt: row.receivedAt });
+      tx.push({ siteId: site.id, txType: 'RECEIPT', idempotencyKey: `seed:${code}:${row.code}`, skuId: skuIds.get(row.sku)!, lotId, handlingUnitId: id, toLocationId: location, toStatus: 'AVAILABLE', quantity: row.qty, referenceType: 'SEED', referenceId: id, occurredAt: row.receivedAt });
+      occ.push({ siteId: site.id, locationId: location, occupantType: 'HANDLING_UNIT', occupantId: id, kind: 'OCCUPIED', singleOccupancy: false, occupiedAt: row.receivedAt, positionSource: 'CONFIRMED_SCAN', startedAt: row.receivedAt });
+      mov.push({ siteId: site.id, subjectType: 'HANDLING_UNIT', subjectId: id, toLocationId: location, positionSource: 'CONFIRMED_SCAN', reason: row.today ? 'Put-away' : 'Initial stock (seed)', occurredAt: row.receivedAt });
+      if (row.today) {
         taskNo++;
-        tasks.push({ siteId: site.id, code: `TSK-${code.slice(-2)}${String(taskNo).padStart(4, '0')}`, taskType: 'PUTAWAY', status: 'COMPLETED', subjectType: 'HANDLING_UNIT', subjectId: id, toLocationId: location, sourceType: 'SEED', sourceId: id, completedAt: r.receivedAt, startedAt: new Date(r.receivedAt.getTime() - 4 * 60_000), createdAt: new Date(r.receivedAt.getTime() - 9 * 60_000), payload: { subjectCode: r.code } });
+        tasks.push({ siteId: site.id, code: `TSK-${code.slice(-2)}${String(taskNo).padStart(4, '0')}`, taskType: 'PUTAWAY', status: 'COMPLETED', subjectType: 'HANDLING_UNIT', subjectId: id, toLocationId: location, sourceType: 'SEED', sourceId: id, completedAt: row.receivedAt, startedAt: new Date(row.receivedAt.getTime() - 4 * 60_000), createdAt: new Date(row.receivedAt.getTime() - 9 * 60_000), payload: { subjectCode: row.code } });
       }
     }
     // Put-away hôm nay của pallet director sẽ nhận (đã có sẵn trong số 35/20…) — bù bằng task của pallet hôm qua
-    for (let i = 0; i < (DIRECTOR_RECEIPTS[code] ?? 0); i++) {
-      const h = hu[hu.length - 1 - todayCount - i];
+    for (let extraIndex = 0; extraIndex < (DIRECTOR_RECEIPTS[code] ?? 0); extraIndex++) {
+      const handlingUnit = hu[hu.length - 1 - todayCount - extraIndex];
       taskNo++;
-      tasks.push({ siteId: site.id, code: `TSK-${code.slice(-2)}${String(taskNo).padStart(4, '0')}`, taskType: 'PUTAWAY', status: 'COMPLETED', subjectType: 'HANDLING_UNIT', subjectId: h.id!, toLocationId: h.locationId!, sourceType: 'SEED', sourceId: h.id!, completedAt: new Date(todayStart.getTime() + 20 * 60_000), createdAt: new Date(todayStart.getTime() + 10 * 60_000), payload: { subjectCode: h.code } });
+      tasks.push({ siteId: site.id, code: `TSK-${code.slice(-2)}${String(taskNo).padStart(4, '0')}`, taskType: 'PUTAWAY', status: 'COMPLETED', subjectType: 'HANDLING_UNIT', subjectId: handlingUnit.id!, toLocationId: handlingUnit.locationId!, sourceType: 'SEED', sourceId: handlingUnit.id!, completedAt: new Date(todayStart.getTime() + 20 * 60_000), createdAt: new Date(todayStart.getTime() + 10 * 60_000), payload: { subjectCode: handlingUnit.code } });
     }
-    await chunked(hu, (b) => prisma.handlingUnit.createMany({ data: b }));
-    await chunked(bal, (b) => prisma.inventoryBalance.createMany({ data: b }));
-    await chunked(tx, (b) => prisma.inventoryTransaction.createMany({ data: b }));
-    await chunked(occ, (b) => prisma.locationOccupancy.createMany({ data: b }));
-    await chunked(mov, (b) => prisma.movementRecord.createMany({ data: b }));
-    await chunked(tasks, (b) => prisma.operationTask.createMany({ data: b }));
+    await chunked(hu, (batch) => prisma.handlingUnit.createMany({ data: batch }));
+    await chunked(bal, (batch) => prisma.inventoryBalance.createMany({ data: batch }));
+    await chunked(tx, (batch) => prisma.inventoryTransaction.createMany({ data: batch }));
+    await chunked(occ, (batch) => prisma.locationOccupancy.createMany({ data: batch }));
+    await chunked(mov, (batch) => prisma.movementRecord.createMany({ data: batch }));
+    await chunked(tasks, (batch) => prisma.operationTask.createMany({ data: batch }));
     total += rows.length;
     void userIds;
   }
@@ -191,35 +191,35 @@ async function seedHistory(sites: Map<string, SiteRef>, carriers: Map<string, st
     const inv = SITE_INVENTORY[code];
     if (!inv) continue;
     const pool: string[] = [];
-    for (let i = 0; i < 12; i++) {
-      const t = await prisma.truck.create({ data: { code: `TRK-${truckNo++}`, plateNumber: `HX${truckNo}${i}`, truckType: 'BOX', carrierId: carrierIds[i % carrierIds.length] } });
-      pool.push(t.id);
+    for (let truckIndex = 0; truckIndex < 12; truckIndex++) {
+      const truck = await prisma.truck.create({ data: { code: `TRK-${truckNo++}`, plateNumber: `HX${truckNo}${truckIndex}`, truckType: 'BOX', carrierId: carrierIds[truckIndex % carrierIds.length] } });
+      pool.push(truck.id);
     }
     const visits: Prisma.TruckVisitCreateManyInput[] = [];
-    for (let i = 0; i < inv.outboundToday; i++) {
-      const exitedAt = new Date(todayStart.getTime() + ((i + 1) / (inv.outboundToday + 1)) * span * 60_000);
+    for (let visitIndex = 0; visitIndex < inv.outboundToday; visitIndex++) {
+      const exitedAt = new Date(todayStart.getTime() + ((visitIndex + 1) / (inv.outboundToday + 1)) * span * 60_000);
       const arrivedAt = new Date(exitedAt.getTime() - 55 * 60_000);
       visits.push({
-        siteId: site.id, code: `VIS-H${code.slice(-2)}-${String(i + 1).padStart(3, '0')}`, truckId: pool[i % pool.length], direction: 'OUTBOUND', status: 'EXITED',
+        siteId: site.id, code: `VIS-H${code.slice(-2)}-${String(visitIndex + 1).padStart(3, '0')}`, truckId: pool[visitIndex % pool.length], direction: 'OUTBOUND', status: 'EXITED',
         appointmentStart: arrivedAt, appointmentEnd: new Date(arrivedAt.getTime() + 3600_000), arrivedAt, verifiedAt: arrivedAt, dockedAt: arrivedAt, handlingStartedAt: arrivedAt, readyAt: exitedAt, exitedAt, exitReason: 'COMPLETED',
       });
     }
     await prisma.truckVisit.createMany({ data: visits });
 
     const ships: Prisma.ShipmentCreateManyInput[] = [];
-    const window = (startDays: number, pct: number, n: number) => {
-      const onTime = Math.round((pct / 100) * n);
-      for (let i = 0; i < n; i++) {
-        const promisedAt = minutes(-60 * 24 * (startDays + (i / n) * 29.5) - 60);
-        const late = i >= onTime;
+    const window = (startDays: number, pct: number, count: number) => {
+      const onTime = Math.round((pct / 100) * count);
+      for (let shipmentIndex = 0; shipmentIndex < count; shipmentIndex++) {
+        const promisedAt = minutes(-60 * 24 * (startDays + (shipmentIndex / count) * 29.5) - 60);
+        const late = shipmentIndex >= onTime;
         const deliveredAt = new Date(promisedAt.getTime() + (late ? 40 : -25) * 60_000);
         const plannedDispatchAt = new Date(promisedAt.getTime() - 4 * 3600_000);
-        ships.push({ siteId: site.id, code: `SHP-${shpNo++}`, direction: 'OUTBOUND', status: 'DELIVERED', partnerId: customers[i % customers.length], carrierId: carrierIds[i % carrierIds.length], plannedDispatchAt, dispatchedAt: new Date(plannedDispatchAt.getTime() + (late ? 20 : -5) * 60_000), promisedAt, deliveredAt, expectedHuCount: 6, createdAt: new Date(plannedDispatchAt.getTime() - 6 * 3600_000) });
+        ships.push({ siteId: site.id, code: `SHP-${shpNo++}`, direction: 'OUTBOUND', status: 'DELIVERED', partnerId: customers[shipmentIndex % customers.length], carrierId: carrierIds[shipmentIndex % carrierIds.length], plannedDispatchAt, dispatchedAt: new Date(plannedDispatchAt.getTime() + (late ? 20 : -5) * 60_000), promisedAt, deliveredAt, expectedHuCount: 6, createdAt: new Date(plannedDispatchAt.getTime() - 6 * 3600_000) });
       }
     };
     window(0.1, inv.onTime.pct30, inv.onTime.samples);
     window(30.2, inv.onTime.pctPrev, inv.onTime.samples);
-    await chunked(ships, (b) => prisma.shipment.createMany({ data: b }));
+    await chunked(ships, (batch) => prisma.shipment.createMany({ data: batch }));
   }
 }
 // ───────────── Vehicle Storage (WH-06) ─────────────
@@ -238,10 +238,10 @@ const VIN_TRANSLIT: Record<string, number> = { A: 1, B: 2, C: 3, D: 4, E: 5, F: 
 const VIN_WEIGHTS = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2];
 
 /** VIN hư cấu nhưng hợp lệ (check digit đúng) để demo không bật cảnh báo DEC-22. */
-function makeVin(wmi: string, n: number): string {
-  const vds = Array.from({ length: 5 }, (_, i) => VIN_CHARS[(n * 7 + i * 11) % VIN_CHARS.length]).join('');
-  const raw = `${wmi}${vds}0R${'ABCDEFGH'[n % 8]}${String(100000 + n * 137).slice(-6)}`;
-  const sum = raw.split('').reduce((s, ch, i) => s + (/\d/.test(ch) ? Number(ch) : VIN_TRANSLIT[ch]) * VIN_WEIGHTS[i], 0);
+function makeVin(wmi: string, serial: number): string {
+  const vds = Array.from({ length: 5 }, (_, charIndex) => VIN_CHARS[(serial * 7 + charIndex * 11) % VIN_CHARS.length]).join('');
+  const raw = `${wmi}${vds}0R${'ABCDEFGH'[serial % 8]}${String(100000 + serial * 137).slice(-6)}`;
+  const sum = raw.split('').reduce((weightedSum, character, position) => weightedSum + (/\d/.test(character) ? Number(character) : VIN_TRANSLIT[character]) * VIN_WEIGHTS[position], 0);
   const check = sum % 11 === 10 ? 'X' : String(sum % 11);
   return raw.slice(0, 8) + check + raw.slice(9);
 }
@@ -252,7 +252,7 @@ async function seedVehicles(site: { id: string; locationIds: Map<string, string>
       { code: 'SAG', name: 'Summit Auto Group' },
       { code: 'CLR', name: 'Coastline Rentals' },
       { code: 'NPF', name: 'Northpoint Fleet Leasing' },
-    ].map((p) => prisma.partner.create({ data: { code: p.code, name: p.name, partnerTypes: ['CUSTOMER'] } })),
+    ].map((ownerSeed) => prisma.partner.create({ data: { code: ownerSeed.code, name: ownerSeed.name, partnerTypes: ['CUSTOMER'] } })),
   );
   const dispatcher = await prisma.user.findUniqueOrThrow({ where: { username: 'dispatcher' } });
   const checklist = ['EXTERIOR', 'INTERIOR', 'KEYS', 'DOCUMENTS', 'PHOTOS_4_SIDES'].map((key) => ({ key, passed: true }));
@@ -261,9 +261,9 @@ async function seedVehicles(site: { id: string; locationIds: Map<string, string>
   type Plan = { status: 'EXPECTED' | 'RECEIVED' | 'INSPECTED' | 'STORED' | 'RELEASE_REQUESTED'; slot?: string; condition?: 'OK' | 'MINOR_DAMAGE' | 'MAJOR_DAMAGE'; hold?: string };
   const plans: Plan[] = [];
   for (const row of ['A', 'B', 'C', 'D']) {
-    for (let c = 1; c <= 20; c++) {
-      if ((c * 7 + row.charCodeAt(0)) % 5 >= 3) continue;
-      plans.push({ status: 'STORED', slot: `P-${row}-${String(c).padStart(3, '0')}` });
+    for (let column = 1; column <= 20; column++) {
+      if ((column * 7 + row.charCodeAt(0)) % 5 >= 3) continue;
+      plans.push({ status: 'STORED', slot: `P-${row}-${String(column).padStart(3, '0')}` });
     }
   }
   plans[3].condition = 'MINOR_DAMAGE';
@@ -273,37 +273,37 @@ async function seedVehicles(site: { id: string; locationIds: Map<string, string>
   plans[24].status = 'RELEASE_REQUESTED';
   plans.push({ status: 'INSPECTED' }, { status: 'RECEIVED' }, { status: 'EXPECTED' }, { status: 'EXPECTED' }, { status: 'EXPECTED' });
 
-  let n = 0;
-  for (const p of plans) {
-    n++;
-    const m = MODELS[n % MODELS.length];
-    const owner = owners[n % owners.length];
+  let vehicleNo = 0;
+  for (const plan of plans) {
+    vehicleNo++;
+    const modelSpec = MODELS[vehicleNo % MODELS.length];
+    const owner = owners[vehicleNo % owners.length];
     const vehicle = await prisma.storedVehicle.create({
-      data: { vin: makeVin(m.wmi, n), make: m.make, model: m.model, modelYear: 2023 + (n % 4), color: m.colors[n % m.colors.length], plateNumber: n % 3 === 0 ? null : `${owner.code}-${String(4000 + n * 13).slice(-4)}`, ownerPartnerId: owner.id },
+      data: { vin: makeVin(modelSpec.wmi, vehicleNo), make: modelSpec.make, model: modelSpec.model, modelYear: 2023 + (vehicleNo % 4), color: modelSpec.colors[vehicleNo % modelSpec.colors.length], plateNumber: vehicleNo % 3 === 0 ? null : `${owner.code}-${String(4000 + vehicleNo * 13).slice(-4)}`, ownerPartnerId: owner.id },
     });
-    const daysAgo = 1 + ((n * 5) % 40);
-    const received = p.status === 'EXPECTED' ? null : minutes(-daysAgo * 1440);
+    const daysAgo = 1 + ((vehicleNo * 5) % 40);
+    const received = plan.status === 'EXPECTED' ? null : minutes(-daysAgo * 1440);
     const stay = await prisma.vehicleStay.create({
       data: {
         siteId: site.id,
         vehicleId: vehicle.id,
-        status: p.status,
-        conditionStatus: p.condition ?? 'OK',
-        holdFlag: !!p.hold,
-        holdReason: p.hold ?? null,
-        odometerKm: received ? 15 + ((n * 97) % 900) : null,
-        fuelOrBatteryPct: received ? 30 + ((n * 13) % 60) : null,
-        keyTag: received ? `K-${String(n).padStart(3, '0')}` : null,
-        expectedAt: p.status === 'EXPECTED' ? minutes(60 + n * 15) : minutes(-daysAgo * 1440 - 60),
+        status: plan.status,
+        conditionStatus: plan.condition ?? 'OK',
+        holdFlag: !!plan.hold,
+        holdReason: plan.hold ?? null,
+        odometerKm: received ? 15 + ((vehicleNo * 97) % 900) : null,
+        fuelOrBatteryPct: received ? 30 + ((vehicleNo * 13) % 60) : null,
+        keyTag: received ? `K-${String(vehicleNo).padStart(3, '0')}` : null,
+        expectedAt: plan.status === 'EXPECTED' ? minutes(60 + vehicleNo * 15) : minutes(-daysAgo * 1440 - 60),
         receivedAt: received,
-        storedAt: p.slot ? minutes(-daysAgo * 1440 + 45) : null,
+        storedAt: plan.slot ? minutes(-daysAgo * 1440 + 45) : null,
       },
     });
-    if (['INSPECTED', 'STORED', 'RELEASE_REQUESTED'].includes(p.status)) {
-      await prisma.vehicleInspection.create({ data: { siteId: site.id, vehicleStayId: stay.id, inspectionType: 'RECEIVING', checklist, resultCondition: p.condition ?? 'OK', inspectorId: dispatcher.id, inspectedAt: minutes(-daysAgo * 1440 + 20) } });
+    if (['INSPECTED', 'STORED', 'RELEASE_REQUESTED'].includes(plan.status)) {
+      await prisma.vehicleInspection.create({ data: { siteId: site.id, vehicleStayId: stay.id, inspectionType: 'RECEIVING', checklist, resultCondition: plan.condition ?? 'OK', inspectorId: dispatcher.id, inspectedAt: minutes(-daysAgo * 1440 + 20) } });
     }
-    if (p.slot) {
-      const locationId = site.locationIds.get(p.slot)!;
+    if (plan.slot) {
+      const locationId = site.locationIds.get(plan.slot)!;
       await prisma.locationOccupancy.create({
         data: { siteId: site.id, locationId, occupantType: 'VEHICLE_STAY', occupantId: stay.id, kind: 'OCCUPIED', singleOccupancy: true, occupiedAt: minutes(-daysAgo * 1440 + 45), positionSource: 'CONFIRMED_SCAN' },
       });
@@ -312,14 +312,14 @@ async function seedVehicles(site: { id: string; locationIds: Map<string, string>
     // Nhật ký kiểm toán để lịch sử VIN có đủ mốc (AC-08)
     const base = -daysAgo * 1440;
     const audit = (action: string, offsetMin: number, reason?: string) => ({ siteId: site.id, actorType: 'USER' as const, actorId: dispatcher.id, action, entityType: 'VehicleStay', entityId: stay.id, reason: reason ?? null, occurredAt: minutes(offsetMin) });
-    const entries = [audit('VEHICLE_STAY_CREATED', p.status === 'EXPECTED' ? -30 : base - 120)];
+    const entries = [audit('VEHICLE_STAY_CREATED', plan.status === 'EXPECTED' ? -30 : base - 120)];
     if (received) entries.push(audit('VEHICLE_RECEIVED', base));
-    if (['INSPECTED', 'STORED', 'RELEASE_REQUESTED'].includes(p.status)) entries.push(audit('VEHICLE_INSPECTED', base + 20));
-    if (p.slot) entries.push(audit('SLOT_RESERVED', base + 25), audit('VEHICLE_STORED', base + 45));
-    if (p.hold) entries.push({ ...audit('VEHICLE_HOLD_SET', base + 60, p.hold) });
-    if (p.status === 'RELEASE_REQUESTED') entries.push(audit('VEHICLE_RELEASE_REQUESTED', -90, 'Sold — dealer pickup'));
+    if (['INSPECTED', 'STORED', 'RELEASE_REQUESTED'].includes(plan.status)) entries.push(audit('VEHICLE_INSPECTED', base + 20));
+    if (plan.slot) entries.push(audit('SLOT_RESERVED', base + 25), audit('VEHICLE_STORED', base + 45));
+    if (plan.hold) entries.push({ ...audit('VEHICLE_HOLD_SET', base + 60, plan.hold) });
+    if (plan.status === 'RELEASE_REQUESTED') entries.push(audit('VEHICLE_RELEASE_REQUESTED', -90, 'Sold — dealer pickup'));
     await prisma.auditLog.createMany({ data: entries });
-    if (p.status === 'RELEASE_REQUESTED') {
+    if (plan.status === 'RELEASE_REQUESTED') {
       await prisma.releaseRequest.create({ data: { siteId: site.id, vehicleStayId: stay.id, reason: 'Sold — dealer pickup', recipientName: 'Jordan Blake (Summit Auto)', plannedAt: minutes(180), requestedById: dispatcher.id } });
     }
   }
@@ -340,7 +340,7 @@ async function seedExceptionsAndNotifications(sites: Map<string, { id: string; l
     ...(damaged && wh6 ? [{ siteId: wh6, code: 'EXC-00004', caseType: 'VEHICLE_DAMAGE', severity: 'HIGH' as const, status: 'OPEN' as const, subjectType: 'VEHICLE_STAY', subjectId: damaged.id, description: `Major damage on ${damaged.vehicle.vin} — front bumper and headlight`, createdById: dispatcher, createdAt: minutes(-60 * 24 * 3) }] : []),
   ];
   const created = [];
-  for (const c of cases) created.push(await prisma.exceptionCase.create({ data: c }));
+  for (const caseData of cases) created.push(await prisma.exceptionCase.create({ data: caseData }));
   await prisma.codeCounter.create({ data: { scope: 'EXC', value: cases.length } });
 
   const [exc1, , , exc4] = created;
@@ -358,111 +358,111 @@ async function truncateAll() {
   const tables = await prisma.$queryRaw<{ tablename: string }[]>`
     SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
   if (tables.length === 0) return;
-  const list = tables.map((t) => `"${t.tablename}"`).join(', ');
+  const list = tables.map((table) => `"${table.tablename}"`).join(', ');
   await prisma.$executeRawUnsafe(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
 }
 
 async function seedRoles() {
   const permissions = new Map<string, string>();
   for (const code of ALL_PERMISSIONS) {
-    const p = await prisma.permission.create({ data: { code, module: code.split('.')[0] } });
-    permissions.set(code, p.id);
+    const permission = await prisma.permission.create({ data: { code, module: code.split('.')[0] } });
+    permissions.set(code, permission.id);
   }
   const roles = new Map<string, string>();
   for (const role of Object.values(Role)) {
-    const r = await prisma.role.create({ data: { code: role, name: ROLE_LABELS[role].en } });
-    roles.set(role, r.id);
-    const perms = ALL_PERMISSIONS.filter((p) => (PERMISSION_MATRIX[p] as readonly string[]).includes(role));
-    await prisma.rolePermission.createMany({ data: perms.map((p) => ({ roleId: r.id, permissionId: permissions.get(p)! })) });
+    const roleRecord = await prisma.role.create({ data: { code: role, name: ROLE_LABELS[role].en } });
+    roles.set(role, roleRecord.id);
+    const perms = ALL_PERMISSIONS.filter((permissionCode) => (PERMISSION_MATRIX[permissionCode] as readonly string[]).includes(role));
+    await prisma.rolePermission.createMany({ data: perms.map((permissionCode) => ({ roleId: roleRecord.id, permissionId: permissions.get(permissionCode)! })) });
   }
   return roles;
 }
 
-async function seedSite(s: SiteSeed) {
+async function seedSite(siteSeed: SiteSeed) {
   const site = await prisma.site.create({
-    data: { code: s.code, name: s.name, siteType: s.siteType, addressLine: s.address, timezone: 'America/New_York', mapX: s.map?.x ?? 0, mapZ: s.map?.z ?? 0 },
+    data: { code: siteSeed.code, name: siteSeed.name, siteType: siteSeed.siteType, addressLine: siteSeed.address, timezone: 'America/New_York', mapX: siteSeed.map?.x ?? 0, mapZ: siteSeed.map?.z ?? 0 },
   });
   const zoneIds = new Map<string, string>();
-  for (const z of s.layout.zones) {
-    const zone = await prisma.zone.create({ data: { siteId: site.id, code: z.code, name: z.name, zoneType: z.zoneType } });
-    zoneIds.set(z.code, zone.id);
+  for (const zoneSpec of siteSeed.layout.zones) {
+    const zone = await prisma.zone.create({ data: { siteId: site.id, code: zoneSpec.code, name: zoneSpec.name, zoneType: zoneSpec.zoneType } });
+    zoneIds.set(zoneSpec.code, zone.id);
   }
   const locationIds = new Map<string, string>();
   const locRows: Prisma.LocationCreateManyInput[] = [];
   const dockRows: Prisma.DockCreateManyInput[] = [];
-  for (const l of s.layout.locations) {
+  for (const locationSpec of siteSeed.layout.locations) {
     const id = uuidv7();
     locRows.push({
       id,
       siteId: site.id,
-      zoneId: zoneIds.get(l.zone)!,
-      code: l.code,
-      name: l.label ?? null,
-      qrValue: `WT:LOC:${s.code}:${l.code}`,
-      locationType: l.type,
-      capacityUnits: l.capacity,
-      singleOccupancy: l.single,
-      lengthM: l.lengthM,
-      widthM: l.widthM,
+      zoneId: zoneIds.get(locationSpec.zone)!,
+      code: locationSpec.code,
+      name: locationSpec.label ?? null,
+      qrValue: `WT:LOC:${siteSeed.code}:${locationSpec.code}`,
+      locationType: locationSpec.type,
+      capacityUnits: locationSpec.capacity,
+      singleOccupancy: locationSpec.single,
+      lengthM: locationSpec.lengthM,
+      widthM: locationSpec.widthM,
     });
-    locationIds.set(l.code, id);
-    if (l.type === 'DOCK') dockRows.push({ locationId: id, siteId: site.id, direction: l.dockDirection ?? 'BOTH', doorNumber: l.doorNumber, maxTruckLengthM: l.lengthM });
+    locationIds.set(locationSpec.code, id);
+    if (locationSpec.type === 'DOCK') dockRows.push({ locationId: id, siteId: site.id, direction: locationSpec.dockDirection ?? 'BOTH', doorNumber: locationSpec.doorNumber, maxTruckLengthM: locationSpec.lengthM });
   }
   await prisma.location.createMany({ data: locRows });
   if (dockRows.length) await prisma.dock.createMany({ data: dockRows });
-  const b = s.layout.bounds;
+  const bounds = siteSeed.layout.bounds;
   const layout = await prisma.layoutVersion.create({
-    data: { siteId: site.id, versionNo: 1, status: 'PUBLISHED', boundsMinX: b.minX, boundsMinZ: b.minZ, boundsMaxX: b.maxX, boundsMaxZ: b.maxZ, publishedAt: now },
+    data: { siteId: site.id, versionNo: 1, status: 'PUBLISHED', boundsMinX: bounds.minX, boundsMinZ: bounds.minZ, boundsMaxX: bounds.maxX, boundsMaxZ: bounds.maxZ, publishedAt: now },
   });
   const objects: Prisma.LayoutObjectCreateManyInput[] = [
-    ...s.layout.zones
-      .filter((z) => z.color !== 'transparent')
-      .map((z) => ({
+    ...siteSeed.layout.zones
+      .filter((zoneSpec) => zoneSpec.color !== 'transparent')
+      .map((zoneSpec) => ({
         layoutVersionId: layout.id,
         targetType: 'ZONE' as const,
-        targetId: zoneIds.get(z.code)!,
-        posX: z.rect.x + z.rect.w / 2,
-        posZ: z.rect.z + z.rect.d / 2,
-        sizeX: z.rect.w,
+        targetId: zoneIds.get(zoneSpec.code)!,
+        posX: zoneSpec.rect.x + zoneSpec.rect.w / 2,
+        posZ: zoneSpec.rect.z + zoneSpec.rect.d / 2,
+        sizeX: zoneSpec.rect.w,
         sizeY: 0.02,
-        sizeZ: z.rect.d,
-        props: { color: z.color, name: z.name, zoneType: z.zoneType },
+        sizeZ: zoneSpec.rect.d,
+        props: { color: zoneSpec.color, name: zoneSpec.name, zoneType: zoneSpec.zoneType },
       })),
-    ...s.layout.locations
-      .filter((l) => !l.noLayout)
-      .map((l) => ({
+    ...siteSeed.layout.locations
+      .filter((locationSpec) => !locationSpec.noLayout)
+      .map((locationSpec) => ({
         layoutVersionId: layout.id,
         targetType: 'LOCATION' as const,
-        targetId: locationIds.get(l.code)!,
-        meshRef: `LOC:${l.code}`,
-        posX: l.pos.x,
-        posZ: l.pos.z,
-        rotY: l.pos.rotY,
-        sizeX: l.size.x,
+        targetId: locationIds.get(locationSpec.code)!,
+        meshRef: `LOC:${locationSpec.code}`,
+        posX: locationSpec.pos.x,
+        posZ: locationSpec.pos.z,
+        rotY: locationSpec.pos.rotY,
+        sizeX: locationSpec.size.x,
         sizeY: 0.05,
-        sizeZ: l.size.z,
-        props: { code: l.code, locationType: l.type, label: l.label ?? l.code, display: l.display ?? null, levels: l.levels ?? null, bays: l.bays ?? null },
+        sizeZ: locationSpec.size.z,
+        props: { code: locationSpec.code, locationType: locationSpec.type, label: locationSpec.label ?? locationSpec.code, display: locationSpec.display ?? null, levels: locationSpec.levels ?? null, bays: locationSpec.bays ?? null },
       })),
-    ...s.layout.buildings.map((bd) => ({
+    ...siteSeed.layout.buildings.map((buildingSpec) => ({
       layoutVersionId: layout.id,
       targetType: 'BUILDING' as const,
-      posX: bd.rect.x + bd.rect.w / 2,
-      posZ: bd.rect.z + bd.rect.d / 2,
-      sizeX: bd.rect.w,
-      sizeY: bd.height,
-      sizeZ: bd.rect.d,
-      props: { label: bd.label, roofColor: bd.roofColor, wallColor: bd.wallColor, code: bd.code, style: (bd.style ?? null) as unknown as Prisma.InputJsonValue },
+      posX: buildingSpec.rect.x + buildingSpec.rect.w / 2,
+      posZ: buildingSpec.rect.z + buildingSpec.rect.d / 2,
+      sizeX: buildingSpec.rect.w,
+      sizeY: buildingSpec.height,
+      sizeZ: buildingSpec.rect.d,
+      props: { label: buildingSpec.label, roofColor: buildingSpec.roofColor, wallColor: buildingSpec.wallColor, code: buildingSpec.code, style: (buildingSpec.style ?? null) as unknown as Prisma.InputJsonValue },
     })),
-    ...s.layout.decor.map((d) => ({
+    ...siteSeed.layout.decor.map((decorSpec) => ({
       layoutVersionId: layout.id,
       targetType: 'DECOR' as const,
-      posX: d.x,
-      posZ: d.z,
-      rotY: d.rotY ?? 0,
-      sizeX: d.w ?? 1,
-      sizeY: d.h ?? 1,
-      sizeZ: d.d ?? 1,
-      props: { kind: d.kind, color: d.color ?? null, label: d.label ?? null, ...(d.props ?? {}) } as Prisma.InputJsonValue,
+      posX: decorSpec.x,
+      posZ: decorSpec.z,
+      rotY: decorSpec.rotY ?? 0,
+      sizeX: decorSpec.w ?? 1,
+      sizeY: decorSpec.h ?? 1,
+      sizeZ: decorSpec.d ?? 1,
+      props: { kind: decorSpec.kind, color: decorSpec.color ?? null, label: decorSpec.label ?? null, ...(decorSpec.props ?? {}) } as Prisma.InputJsonValue,
     })),
   ];
   await prisma.layoutObject.createMany({ data: objects });
@@ -475,72 +475,72 @@ async function main() {
   const roles = await seedRoles();
 
   const sites = new Map<string, SiteRef>();
-  for (const s of SITES) {
-    const { site, locationIds } = await seedSite(s);
-    sites.set(s.code, { id: site.id, locationIds });
+  for (const siteSeed of SITES) {
+    const { site, locationIds } = await seedSite(siteSeed);
+    sites.set(siteSeed.code, { id: site.id, locationIds });
   }
   // Panel site hiển thị đúng 4 SKU theo thứ tự video
   for (const [code, site] of sites) {
     const inv = SITE_INVENTORY[code];
-    if (inv) await prisma.siteSetting.create({ data: { siteId: site.id, key: 'dashboardSkus', value: inv.featured.map(([s]) => s) } });
+    if (inv) await prisma.siteSetting.create({ data: { siteId: site.id, key: 'dashboardSkus', value: inv.featured.map(([skuCode]) => skuCode) } });
   }
 
   const carriers = new Map<string, string>();
-  for (const c of CARRIERS) {
-    const p = await prisma.partner.create({ data: { code: c.code, name: c.name, partnerTypes: ['CARRIER'] } });
-    carriers.set(c.code, p.id);
+  for (const carrier of CARRIERS) {
+    const partner = await prisma.partner.create({ data: { code: carrier.code, name: carrier.name, partnerTypes: ['CARRIER'] } });
+    carriers.set(carrier.code, partner.id);
   }
   const customers: string[] = [];
-  for (const p of PARTNERS) {
-    const created = await prisma.partner.create({ data: { code: p.code, name: p.name, partnerTypes: p.types } });
-    if (p.types.includes('CUSTOMER')) customers.push(created.id);
+  for (const partner of PARTNERS) {
+    const created = await prisma.partner.create({ data: { code: partner.code, name: partner.name, partnerTypes: partner.types } });
+    if (partner.types.includes('CUSTOMER')) customers.push(created.id);
   }
 
   const passwordHash = await argon2.hash(DEMO_PASSWORD, { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1 });
   const userIds = new Map<string, string>();
-  for (const u of USERS) {
-    const user = await prisma.user.create({ data: { username: u.username, email: `${u.username}@waretrack.demo`, fullName: u.fullName, passwordHash } });
-    userIds.set(u.username, user.id);
-    for (const g of u.grants) {
-      const siteIds = g.sites ? g.sites.filter((c) => sites.has(c)).map((c) => sites.get(c)!.id) : [null];
-      for (const siteId of siteIds) await prisma.userSiteRole.create({ data: { userId: user.id, roleId: roles.get(g.role)!, siteId } });
+  for (const userSeed of USERS) {
+    const user = await prisma.user.create({ data: { username: userSeed.username, email: `${userSeed.username}@waretrack.demo`, fullName: userSeed.fullName, passwordHash } });
+    userIds.set(userSeed.username, user.id);
+    for (const grant of userSeed.grants) {
+      const siteIds = grant.sites ? grant.sites.filter((siteCode) => sites.has(siteCode)).map((siteCode) => sites.get(siteCode)!.id) : [null];
+      for (const siteId of siteIds) await prisma.userSiteRole.create({ data: { userId: user.id, roleId: roles.get(grant.role)!, siteId } });
     }
   }
 
   // Xe tải + lượt xe theo video
   const ymd = now.toISOString().slice(2, 10).replace(/-/g, '');
   let visitSeq = 0;
-  for (const v of VISITS) {
-    const site = sites.get(v.site);
+  for (const visitSeed of VISITS) {
+    const site = sites.get(visitSeed.site);
     if (!site) continue;
-    const truck = await prisma.truck.create({ data: { code: v.truck, plateNumber: v.plate, truckType: v.type, carrierId: carriers.get(v.carrier)! } });
-    const driver = await prisma.driver.create({ data: { fullName: v.driver, carrierId: carriers.get(v.carrier)! } });
-    const arrivedAt = v.arrivedMinAgo !== undefined ? minutes(-v.arrivedMinAgo) : null;
-    const at = (m: number) => (arrivedAt ? new Date(arrivedAt.getTime() + m * 60_000) : null);
-    const onSite = v.status !== 'SCHEDULED';
-    const dockId = v.dock ? site.locationIds.get(v.dock)! : null;
-    const appt = arrivedAt ?? minutes(v.etaMin ?? 30);
+    const truck = await prisma.truck.create({ data: { code: visitSeed.truck, plateNumber: visitSeed.plate, truckType: visitSeed.type, carrierId: carriers.get(visitSeed.carrier)! } });
+    const driver = await prisma.driver.create({ data: { fullName: visitSeed.driver, carrierId: carriers.get(visitSeed.carrier)! } });
+    const arrivedAt = visitSeed.arrivedMinAgo !== undefined ? minutes(-visitSeed.arrivedMinAgo) : null;
+    const at = (offsetMinutes: number) => (arrivedAt ? new Date(arrivedAt.getTime() + offsetMinutes * 60_000) : null);
+    const onSite = visitSeed.status !== 'SCHEDULED';
+    const dockId = visitSeed.dock ? site.locationIds.get(visitSeed.dock)! : null;
+    const appt = arrivedAt ?? minutes(visitSeed.etaMin ?? 30);
     const visit = await prisma.truckVisit.create({
       data: {
         siteId: site.id,
         code: `VIS-${ymd}-${String(++visitSeq).padStart(4, '0')}`,
         truckId: truck.id,
         driverId: driver.id,
-        direction: v.direction,
-        status: v.status,
+        direction: visitSeed.direction,
+        status: visitSeed.status,
         appointmentStart: appt,
         appointmentEnd: new Date(appt.getTime() + 3600_000),
-        etaAt: v.etaMin !== undefined ? minutes(v.etaMin) : null,
+        etaAt: visitSeed.etaMin !== undefined ? minutes(visitSeed.etaMin) : null,
         arrivedAt,
-        verifiedAt: onSite && v.status !== 'AT_GATE' ? at(2) : null,
-        dockedAt: ['AT_DOCK', 'HANDLING'].includes(v.status) ? at(5) : null,
-        handlingStartedAt: v.status === 'HANDLING' ? at(7) : null,
+        verifiedAt: onSite && visitSeed.status !== 'AT_GATE' ? at(2) : null,
+        dockedAt: ['AT_DOCK', 'HANDLING'].includes(visitSeed.status) ? at(5) : null,
+        handlingStartedAt: visitSeed.status === 'HANDLING' ? at(7) : null,
         dockLocationId: dockId,
-        actualPlate: arrivedAt ? v.plate.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : null,
+        actualPlate: arrivedAt ? visitSeed.plate.replace(/[^A-Za-z0-9]/g, '').toUpperCase() : null,
       },
     });
     if (dockId) {
-      const occupied = ['AT_DOCK', 'HANDLING'].includes(v.status);
+      const occupied = ['AT_DOCK', 'HANDLING'].includes(visitSeed.status);
       await prisma.locationOccupancy.create({
         data: { siteId: site.id, locationId: dockId, occupantType: 'TRUCK_VISIT', occupantId: visit.id, kind: occupied ? 'OCCUPIED' : 'RESERVED', singleOccupancy: true, occupiedAt: occupied ? at(5) : null, positionSource: occupied ? 'CONFIRMED_SCAN' : null },
       });
@@ -549,20 +549,20 @@ async function main() {
   await prisma.codeCounter.create({ data: { scope: `VIS-${ymd}`, value: visitSeq } });
   await prisma.codeCounter.create({ data: { scope: 'TRK', value: 2700 } });
 
-  for (const e of EQUIPMENT) {
-    const site = sites.get(e.site);
+  for (const equipment of EQUIPMENT) {
+    const site = sites.get(equipment.site);
     if (!site) continue;
     await prisma.equipment.create({
       data: {
         siteId: site.id,
-        code: e.code,
+        code: equipment.code,
         equipmentType: 'FORKLIFT',
-        model: e.model,
-        status: e.status,
-        chargerLocationId: site.locationIds.get(e.charger) ?? null,
-        currentOperatorId: userIds.get(e.operator) ?? null,
-        taskSummary: e.task ?? (e.status === 'CHARGING' ? 'Charging at bay' : e.status === 'AVAILABLE' ? 'Waiting for work' : null),
-        telemetry: { batteryPct: e.battery, speedKmh: e.speed ?? 0, movesToday: e.moves },
+        model: equipment.model,
+        status: equipment.status,
+        chargerLocationId: site.locationIds.get(equipment.charger) ?? null,
+        currentOperatorId: userIds.get(equipment.operator) ?? null,
+        taskSummary: equipment.task ?? (equipment.status === 'CHARGING' ? 'Charging at bay' : equipment.status === 'AVAILABLE' ? 'Waiting for work' : null),
+        telemetry: { batteryPct: equipment.battery, speedKmh: equipment.speed ?? 0, movesToday: equipment.moves },
         telemetryAt: now,
         telemetrySource: 'CONFIRMED_MANUAL',
       },

@@ -78,13 +78,13 @@ export class EquipmentController {
     return this.toDetail(await this.equipment.recordTelemetry(siteId, id, body));
   }
 
-  private toDetail(e: Awaited<ReturnType<EquipmentService['get']>>) {
-    const t = (e.telemetry as EquipmentTelemetry | null) ?? {};
+  private toDetail(equipment: Awaited<ReturnType<EquipmentService['get']>>) {
+    const telemetry = (equipment.telemetry as EquipmentTelemetry | null) ?? {};
     return {
-      ...this.equipment.toSnapshot(e),
-      chargerLocationId: e.chargerLocationId,
-      speedKmh: t.speedKmh ?? null,
-      movesToday: t.movesToday ?? 0,
+      ...this.equipment.toSnapshot(equipment),
+      chargerLocationId: equipment.chargerLocationId,
+      speedKmh: telemetry.speedKmh ?? null,
+      movesToday: telemetry.movesToday ?? 0,
     };
   }
 }

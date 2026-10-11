@@ -12,15 +12,15 @@ import { PathFollower, ShuttleMover } from './Movers';
 import { getObject, objectKey, registerObject } from './registry';
 
 function useSelectHandlers(siteId: string, type: SelectableType, id: string) {
-  const select = useScene((s) => s.select);
-  const setHover = useScene((s) => s.setHover);
+  const select = useScene((state) => state.select);
+  const setHover = useScene((state) => state.setHover);
   return {
-    onClick: (e: ThreeEvent<MouseEvent>) => {
-      e.stopPropagation();
+    onClick: (event: ThreeEvent<MouseEvent>) => {
+      event.stopPropagation();
       select({ siteId, type, id });
     },
-    onPointerOver: (e: ThreeEvent<PointerEvent>) => {
-      e.stopPropagation();
+    onPointerOver: (event: ThreeEvent<PointerEvent>) => {
+      event.stopPropagation();
       setHover({ siteId, type, id });
       document.body.style.cursor = 'pointer';
     },
@@ -54,8 +54,8 @@ const DockDoor = memo(function DockDoor({ siteId, dock, placed, selected }: { si
     <group
       position={[placed.x, 0, placed.z]}
       rotation={[0, placed.rotY, 0]}
-      ref={(g) => {
-        if (g) registerObject(objectKey('dock', dock.locationId), g);
+      ref={(doorGroup) => {
+        if (doorGroup) registerObject(objectKey('dock', dock.locationId), doorGroup);
       }}
       {...handlers}
     >
@@ -81,8 +81,8 @@ const DockDoor = memo(function DockDoor({ siteId, dock, placed, selected }: { si
           <boxGeometry args={[4.1, doorH, 0.05]} />
           <meshStandardMaterial color={panel} roughness={0.6} />
         </mesh>
-        {Array.from({ length: Math.floor(doorH / 0.42) }).map((_, i) => (
-          <mesh key={i} position={[0, doorH / 2 - 0.3 - i * 0.42, 0.03]}>
+        {Array.from({ length: Math.floor(doorH / 0.42) }).map((_, slatIndex) => (
+          <mesh key={slatIndex} position={[0, doorH / 2 - 0.3 - slatIndex * 0.42, 0.03]}>
             <boxGeometry args={[4.05, 0.035, 0.01]} />
             <meshStandardMaterial color="#b9c3d8" />
           </mesh>
@@ -138,14 +138,14 @@ function DepartingTruck({ ghost, layout, onDone }: { ghost: { id: string; truck:
 
 /** Dải lộ trình xanh (video: đường đi của xe đang được chọn) + chấm dẫn vào bay + ghim. */
 function RouteRibbon({ points }: { points: Waypoint[] }) {
-  const segs = points.slice(1).map((p, i) => ({ a: points[i], b: p }));
+  const segs = points.slice(1).map((endPoint, segmentIndex) => ({ startPoint: points[segmentIndex], endPoint }));
   return (
     <group>
-      {segs.map(({ a, b }, i) => {
-        const len = Math.hypot(b.x - a.x, b.z - a.z);
+      {segs.map(({ startPoint, endPoint }, segmentIndex) => {
+        const len = Math.hypot(endPoint.x - startPoint.x, endPoint.z - startPoint.z);
         if (len < 0.2) return null;
         return (
-          <mesh key={i} position={[(a.x + b.x) / 2, 0.06, (a.z + b.z) / 2]} rotation={[0, Math.atan2(b.x - a.x, b.z - a.z), 0]}>
+          <mesh key={segmentIndex} position={[(startPoint.x + endPoint.x) / 2, 0.06, (startPoint.z + endPoint.z) / 2]} rotation={[0, Math.atan2(endPoint.x - startPoint.x, endPoint.z - startPoint.z), 0]}>
             <boxGeometry args={[1.1, 0.02, len + 1.1]} />
             <meshBasicMaterial color="#2f6fe4" />
           </mesh>
@@ -156,18 +156,18 @@ function RouteRibbon({ points }: { points: Waypoint[] }) {
 }
 
 function DockingMarker({ dock, from }: { dock: Placed; from: { x: number; z: number } }) {
-  const o = outward(dock);
-  const bayMouth = { x: dock.x + o.x * 3, z: dock.z + o.z * 3 };
+  const outwardDirection = outward(dock);
+  const bayMouth = { x: dock.x + outwardDirection.x * 3, z: dock.z + outwardDirection.z * 3 };
   const dots = useMemo(() => {
     const out: Array<[number, number]> = [];
-    const n = 5;
-    for (let i = 1; i <= n; i++) out.push([from.x + ((bayMouth.x - from.x) * i) / (n + 1), from.z + ((bayMouth.z - from.z) * i) / (n + 1)]);
+    const dotCount = 5;
+    for (let dotIndex = 1; dotIndex <= dotCount; dotIndex++) out.push([from.x + ((bayMouth.x - from.x) * dotIndex) / (dotCount + 1), from.z + ((bayMouth.z - from.z) * dotIndex) / (dotCount + 1)]);
     return out;
   }, [from.x, from.z, bayMouth.x, bayMouth.z]);
   return (
     <group>
-      {dots.map(([x, z], i) => (
-        <mesh key={i} position={[x, 0.06, z]} rotation={[-Math.PI / 2, 0, 0]}>
+      {dots.map(([x, z], dotIndex) => (
+        <mesh key={dotIndex} position={[x, 0.06, z]} rotation={[-Math.PI / 2, 0, 0]}>
           <circleGeometry args={[0.32, 16]} />
           <meshBasicMaterial color="#2f6fe4" />
         </mesh>
@@ -188,41 +188,41 @@ function DockingMarker({ dock, from }: { dock: Placed; from: { x: number; z: num
 }
 
 /** Pallet theo vị trí: ô sàn xếp lưới 2 cột, rack theo tầng/khoang, dock xếp cạnh đuôi xe. */
-function palletSlotOffset(p: Placed, i: number): { x: number; y: number; z: number; scale: number } {
-  const rot = (lx: number, lz: number) => ({ x: p.x + lx * Math.cos(p.rotY) + lz * Math.sin(p.rotY), z: p.z - lx * Math.sin(p.rotY) + lz * Math.cos(p.rotY) });
-  if (p.display === 'rack') {
-    const perLevel = p.bays;
-    const level = Math.floor(i / perLevel) % p.levels;
-    const bay = i % perLevel;
-    const bw = p.sx / p.bays;
-    const r = rot(-p.sx / 2 + bw * (bay + 0.5), 0);
-    return { x: r.x, y: 0.2 + level * 1.5, z: r.z, scale: 1 };
+function palletSlotOffset(placed: Placed, slotIndex: number): { x: number; y: number; z: number; scale: number } {
+  const rot = (lx: number, lz: number) => ({ x: placed.x + lx * Math.cos(placed.rotY) + lz * Math.sin(placed.rotY), z: placed.z - lx * Math.sin(placed.rotY) + lz * Math.cos(placed.rotY) });
+  if (placed.display === 'rack') {
+    const perLevel = placed.bays;
+    const level = Math.floor(slotIndex / perLevel) % placed.levels;
+    const bay = slotIndex % perLevel;
+    const bw = placed.sx / placed.bays;
+    const slotPosition = rot(-placed.sx / 2 + bw * (bay + 0.5), 0);
+    return { x: slotPosition.x, y: 0.2 + level * 1.5, z: slotPosition.z, scale: 1 };
   }
-  if (p.type === 'DOCK') {
-    const o = outward(p);
-    const t = tangent(p);
-    const side = i % 2 === 0 ? 1 : -1;
-    const k = Math.floor(i / 2);
-    return { x: p.x + o.x * (2.2 + k * 1.7) + t.x * side * 4.2, y: 0, z: p.z + o.z * (2.2 + k * 1.7) + t.z * side * 4.2, scale: 1.3 };
+  if (placed.type === 'DOCK') {
+    const outwardDirection = outward(placed);
+    const tangentDirection = tangent(placed);
+    const side = slotIndex % 2 === 0 ? 1 : -1;
+    const stackRow = Math.floor(slotIndex / 2);
+    return { x: placed.x + outwardDirection.x * (2.2 + stackRow * 1.7) + tangentDirection.x * side * 4.2, y: 0, z: placed.z + outwardDirection.z * (2.2 + stackRow * 1.7) + tangentDirection.z * side * 4.2, scale: 1.3 };
   }
-  const cols = p.sx > 4 ? 3 : 2;
-  const col = i % cols;
-  const rowN = Math.floor(i / cols);
-  const r = rot((col - (cols - 1) / 2) * 1.5, (rowN - 0) * 1.4 - 0.3);
-  return { x: r.x, y: 0, z: r.z, scale: 1.3 };
+  const cols = placed.sx > 4 ? 3 : 2;
+  const col = slotIndex % cols;
+  const rowN = Math.floor(slotIndex / cols);
+  const slotPosition = rot((col - (cols - 1) / 2) * 1.5, (rowN - 0) * 1.4 - 0.3);
+  return { x: slotPosition.x, y: 0, z: slotPosition.z, scale: 1.3 };
 }
 
 const Pallets = memo(function Pallets({ siteId, pallets, layout, selectedId }: { siteId: string; pallets: SiteSnapshot['pallets']; layout: LayoutIndex; selectedId: string | null }) {
   const grouped = useMemo(() => {
-    const m = new Map<string, SiteSnapshot['pallets']>();
-    for (const p of pallets) {
-      const loc = p.position?.locationId;
+    const palletsByLocation = new Map<string, SiteSnapshot['pallets']>();
+    for (const pallet of pallets) {
+      const loc = pallet.position?.locationId;
       if (!loc || !layout.byLocation.has(loc)) continue;
-      const list = m.get(loc) ?? [];
-      list.push(p);
-      m.set(loc, list);
+      const list = palletsByLocation.get(loc) ?? [];
+      list.push(pallet);
+      palletsByLocation.set(loc, list);
     }
-    return m;
+    return palletsByLocation;
   }, [pallets, layout]);
   return (
     <group>
@@ -231,11 +231,11 @@ const Pallets = memo(function Pallets({ siteId, pallets, layout, selectedId }: {
         if (!['STAGING', 'STORAGE', 'DOCK', 'QUARANTINE', 'YARD_SLOT'].includes(placed.type)) return [];
         return list
           .slice()
-          .sort((a, b) => a.code.localeCompare(b.code))
+          .sort((firstPallet, secondPallet) => firstPallet.code.localeCompare(secondPallet.code))
           .slice(0, placed.type === 'DOCK' ? 6 : 12)
-          .map((p, i) => {
-            const o = palletSlotOffset(placed, i);
-            return <PalletItem key={p.id} siteId={siteId} pallet={p} x={o.x} y={o.y} z={o.z} scale={o.scale} rotY={placed.rotY} selected={selectedId === p.id} />;
+          .map((pallet, slotIndex) => {
+            const slotOffset = palletSlotOffset(placed, slotIndex);
+            return <PalletItem key={pallet.id} siteId={siteId} pallet={pallet} x={slotOffset.x} y={slotOffset.y} z={slotOffset.z} scale={slotOffset.scale} rotY={placed.rotY} selected={selectedId === pallet.id} />;
           });
       })}
     </group>
@@ -246,7 +246,7 @@ const BLUE_SKUS = ['glove', 'container'];
 function PalletItem({ siteId, pallet, x, y, z, scale, rotY, selected }: { siteId: string; pallet: SiteSnapshot['pallets'][number]; x: number; y: number; z: number; scale: number; rotY: number; selected: boolean }) {
   const handlers = useSelectHandlers(siteId, 'pallet', pallet.id);
   const label = pallet.label.toLowerCase();
-  const color = pallet.stockStatus === 'QUARANTINE' || pallet.stockStatus === 'DAMAGED' ? '#ef8a8a' : BLUE_SKUS.some((k) => label.includes(k)) ? '#3b6fe0' : label.includes('peas') || label.includes('berries') || label.includes('water') || label.includes('juice') ? '#eef2f8' : '#d9a86c';
+  const color = pallet.stockStatus === 'QUARANTINE' || pallet.stockStatus === 'DAMAGED' ? '#ef8a8a' : BLUE_SKUS.some((skuKeyword) => label.includes(skuKeyword)) ? '#3b6fe0' : label.includes('peas') || label.includes('berries') || label.includes('water') || label.includes('juice') ? '#eef2f8' : '#d9a86c';
   return (
     <Animated objectKey={objectKey('pallet', pallet.id)} x={x} z={z} rotY={rotY} speed={4}>
       <group position={[0, y, 0]} {...handlers}>
@@ -261,10 +261,10 @@ function PalletItem({ siteId, pallet, x, y, z, scale, rotY, selected }: { siteId
 function Vehicles({ siteId, vehicles, layout, selectedId }: { siteId: string; vehicles: SiteSnapshot['vehicles']; layout: LayoutIndex; selectedId: string | null }) {
   return (
     <group>
-      {vehicles.map((v) => {
-        const placed = v.position?.locationId ? layout.byLocation.get(v.position.locationId) : undefined;
+      {vehicles.map((vehicle) => {
+        const placed = vehicle.position?.locationId ? layout.byLocation.get(vehicle.position.locationId) : undefined;
         if (!placed) return null;
-        return <VehicleItem key={v.stayId} siteId={siteId} vehicle={v} x={placed.x} z={placed.z} selected={selectedId === v.stayId} />;
+        return <VehicleItem key={vehicle.stayId} siteId={siteId} vehicle={vehicle} x={placed.x} z={placed.z} selected={selectedId === vehicle.stayId} />;
       })}
     </group>
   );
@@ -293,18 +293,18 @@ function VehicleItem({ siteId, vehicle, x, z, selected }: { siteId: string; vehi
 /** Mã bay ("Bay 1", "In 2") trong task summary của xe nâng → dock. */
 function dockFromSummary(summary: string | null, layout: LayoutIndex, trucks: SnapshotTruck[]): Placed | undefined {
   if (!summary) return undefined;
-  const truck = trucks.find((t) => summary.includes(t.truckCode));
+  const truck = trucks.find((candidateTruck) => summary.includes(candidateTruck.truckCode));
   if (truck?.dockLocationId) return layout.byLocation.get(truck.dockLocationId);
-  const docks = layout.locations.filter((l) => l.type === 'DOCK');
-  return docks.find((d) => summary.toLowerCase().includes(d.label.toLowerCase()));
+  const docks = layout.locations.filter((location) => location.type === 'DOCK');
+  return docks.find((dock) => summary.toLowerCase().includes(dock.label.toLowerCase()));
 }
 
 function nearestStaging(layout: LayoutIndex, from: { x: number; z: number }, pallets: SiteSnapshot['pallets']) {
-  const withPallets = new Set(pallets.map((p) => p.position?.locationId));
-  const floors = layout.locations.filter((l) => l.display === 'floor');
-  const pool = floors.filter((l) => withPallets.has(l.id));
+  const withPallets = new Set(pallets.map((pallet) => pallet.position?.locationId));
+  const floors = layout.locations.filter((location) => location.display === 'floor');
+  const pool = floors.filter((location) => withPallets.has(location.id));
   const list = pool.length ? pool : floors;
-  return list.reduce<Placed | undefined>((best, l) => (!best || Math.hypot(l.x - from.x, l.z - from.z) < Math.hypot(best.x - from.x, best.z - from.z) ? l : best), undefined);
+  return list.reduce<Placed | undefined>((best, location) => (!best || Math.hypot(location.x - from.x, location.z - from.z) < Math.hypot(best.x - from.x, best.z - from.z) ? location : best), undefined);
 }
 
 const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pallets, index, selected, hovered }: { siteId: string; forklift: SiteSnapshot['forklifts'][number]; layout: LayoutIndex; trucks: SnapshotTruck[]; pallets: SiteSnapshot['pallets']; index: number; selected: boolean; hovered: boolean }) {
@@ -318,13 +318,13 @@ const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pall
     const stg = nearestStaging(layout, dock, pallets);
     const far = stg ? { x: stg.x + outward(stg).x * 2.2, z: stg.z + outward(stg).z * 2.2 } : { x: dock.x + outward(dock).x * 9 + tangent(dock).x * 8, z: dock.z + outward(dock).z * 9 + tangent(dock).z * 8 };
     const loading = !forklift.taskSummary?.startsWith('Unloading');
-    const a = loading ? far : spots.atTruck;
-    const b = loading ? spots.atTruck : far;
+    const shuttleStart = loading ? far : spots.atTruck;
+    const shuttleEnd = loading ? spots.atTruck : far;
     return (
       <ShuttleMover
         objectKey={objectKey('forklift', forklift.id)}
-        a={a}
-        b={b}
+        startPoint={shuttleStart}
+        endPoint={shuttleEnd}
         phase={index * 5.3}
         render={(carrying) => (
           <group {...handlers} scale={1.25}>
@@ -336,12 +336,12 @@ const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pall
     );
   }
   // Không có việc: đỗ tại trạm sạc (đang sạc) hoặc ngay trước trạm (chờ việc)
-  const charger = forklift.position?.locationId ? layout.byLocation.get(forklift.position.locationId) : layout.locations.find((l) => l.type === 'CHARGER');
+  const charger = forklift.position?.locationId ? layout.byLocation.get(forklift.position.locationId) : layout.locations.find((location) => location.type === 'CHARGER');
   if (!charger) return null;
-  const o = outward(charger);
-  const k = forklift.status === 'CHARGING' ? 0.4 : 3.2;
+  const outwardDirection = outward(charger);
+  const parkDistance = forklift.status === 'CHARGING' ? 0.4 : 3.2;
   return (
-    <Animated objectKey={objectKey('forklift', forklift.id)} x={charger.x + o.x * k} z={charger.z + o.z * k} rotY={charger.rotY + Math.PI} speed={3}>
+    <Animated objectKey={objectKey('forklift', forklift.id)} x={charger.x + outwardDirection.x * parkDistance} z={charger.z + outwardDirection.z * parkDistance} rotY={charger.rotY + Math.PI} speed={3}>
       <group {...handlers} scale={1.25}>
         <ForkliftModel dim={dim} carrying={false} />
       </group>
@@ -352,8 +352,8 @@ const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pall
 
 /** Các layer động: dữ liệu lấy từ Business State (snapshot trong TanStack Query). */
 export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; layout: LayoutIndex }) {
-  const selection = useScene((s) => s.selection);
-  const hover = useScene((s) => s.hover);
+  const selection = useScene((state) => state.selection);
+  const hover = useScene((state) => state.hover);
   const siteId = snapshot.site.id;
   const sel = (type: SelectableType, id: string) => selection?.type === type && selection.id === id;
   const hov = (type: SelectableType, id: string) => hover?.type === type && hover.id === id;
@@ -367,34 +367,34 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
 
   const truckTargets = useMemo(() => {
     let waiting = 0;
-    return snapshot.trucks.map((t) => ({ truck: t, target: truckTarget(t, layout, t.status === 'WAITING' ? waiting++ : waiting, now) }));
+    return snapshot.trucks.map((truck) => ({ truck, target: truckTarget(truck, layout, truck.status === 'WAITING' ? waiting++ : waiting, now) }));
   }, [snapshot.trucks, layout, now]);
 
   // Xe biến khỏi snapshot (đã rời site) → chạy ra đường rồi biến mất
   const prevTrucks = useRef(new Map<string, SnapshotTruck>());
   const [ghosts, setGhosts] = useState<Array<{ id: string; truck: SnapshotTruck; from: { x: number; z: number; rotY: number } }>>([]);
   useEffect(() => {
-    const current = new Map(snapshot.trucks.map((t) => [t.visitId, t]));
+    const current = new Map(snapshot.trucks.map((truck) => [truck.visitId, truck]));
     const gone: typeof ghosts = [];
-    for (const [id, t] of prevTrucks.current) {
-      if (current.has(id) || !['HANDLING', 'AT_DOCK', 'READY_TO_LEAVE'].includes(t.status)) continue;
+    for (const [id, previousTruck] of prevTrucks.current) {
+      if (current.has(id) || !['HANDLING', 'AT_DOCK', 'READY_TO_LEAVE'].includes(previousTruck.status)) continue;
       const obj = getObject(objectKey('truck', id));
-      if (obj) gone.push({ id: `${id}:${Date.now()}`, truck: t, from: { x: obj.position.x, z: obj.position.z, rotY: obj.rotation.y } });
+      if (obj) gone.push({ id: `${id}:${Date.now()}`, truck: previousTruck, from: { x: obj.position.x, z: obj.position.z, rotY: obj.rotation.y } });
     }
     prevTrucks.current = current;
-    if (gone.length) setGhosts((g) => [...g, ...gone]);
+    if (gone.length) setGhosts((previousGhosts) => [...previousGhosts, ...gone]);
   }, [snapshot.trucks]);
 
   const stagedPins = useMemo(() => {
     const locs = new Set<string>();
-    for (const p of snapshot.pallets) {
-      const loc = p.position?.locationId ? layout.byLocation.get(p.position.locationId) : undefined;
-      if (p.lifecycle === 'STAGED' && loc && loc.display === 'floor' && !loc.label.startsWith('Yard')) locs.add(loc.id);
+    for (const pallet of snapshot.pallets) {
+      const loc = pallet.position?.locationId ? layout.byLocation.get(pallet.position.locationId) : undefined;
+      if (pallet.lifecycle === 'STAGED' && loc && loc.display === 'floor' && !loc.label.startsWith('Yard')) locs.add(loc.id);
     }
     return [...locs].map((id) => layout.byLocation.get(id)!).slice(0, 6);
   }, [snapshot.pallets, layout]);
 
-  const selectedTruck = selection?.type === 'truck' ? truckTargets.find((x) => x.truck.visitId === selection.id) : undefined;
+  const selectedTruck = selection?.type === 'truck' ? truckTargets.find((truckEntry) => truckEntry.truck.visitId === selection.id) : undefined;
   const ribbon = useMemo(() => {
     if (!selectedTruck || !['SCHEDULED', 'AT_GATE', 'DOCK_ASSIGNED'].includes(selectedTruck.truck.status)) return null;
     const { target } = selectedTruck;
@@ -403,13 +403,13 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
 
   return (
     <group>
-      {snapshot.docks.map((d) => {
-        const placed = layout.byLocation.get(d.locationId);
-        return placed ? <DockDoor key={d.locationId} siteId={siteId} dock={d} placed={placed} selected={sel('dock', d.locationId)} /> : null;
+      {snapshot.docks.map((dock) => {
+        const placed = layout.byLocation.get(dock.locationId);
+        return placed ? <DockDoor key={dock.locationId} siteId={siteId} dock={dock} placed={placed} selected={sel('dock', dock.locationId)} /> : null;
       })}
       {truckTargets.map(({ truck, target }) => (target.visible ? <Truck key={truck.visitId} siteId={siteId} truck={truck} target={target} selected={sel('truck', truck.visitId)} hovered={hov('truck', truck.visitId)} /> : null))}
-      {ghosts.map((g) => (
-        <DepartingTruck key={g.id} ghost={g} layout={layout} onDone={() => setGhosts((all) => all.filter((x) => x.id !== g.id))} />
+      {ghosts.map((ghost) => (
+        <DepartingTruck key={ghost.id} ghost={ghost} layout={layout} onDone={() => setGhosts((all) => all.filter((otherGhost) => otherGhost.id !== ghost.id))} />
       ))}
       {truckTargets
         .filter(({ truck, target }) => truck.status === 'DOCK_ASSIGNED' && target.visible && truck.dockLocationId)
@@ -418,12 +418,12 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
           return dock ? <DockingMarker key={`dm:${truck.visitId}`} dock={dock} from={{ x: target.x - outward(dock).x * 7.5, z: target.z - outward(dock).z * 7.5 }} /> : null;
         })}
       {ribbon ? <RouteRibbon points={ribbon} /> : null}
-      {snapshot.forklifts.map((f, i) => (
-        <Forklift key={f.id} siteId={siteId} forklift={f} layout={layout} trucks={snapshot.trucks} pallets={snapshot.pallets} index={i} selected={sel('forklift', f.id)} hovered={hov('forklift', f.id)} />
+      {snapshot.forklifts.map((forklift, forkliftIndex) => (
+        <Forklift key={forklift.id} siteId={siteId} forklift={forklift} layout={layout} trucks={snapshot.trucks} pallets={snapshot.pallets} index={forkliftIndex} selected={sel('forklift', forklift.id)} hovered={hov('forklift', forklift.id)} />
       ))}
       <Pallets siteId={siteId} pallets={snapshot.pallets} layout={layout} selectedId={selection?.type === 'pallet' ? selection.id : null} />
-      {stagedPins.map((p) => (
-        <group key={p.id} position={[p.x, 2.6, p.z]}>
+      {stagedPins.map((pinLocation) => (
+        <group key={pinLocation.id} position={[pinLocation.x, 2.6, pinLocation.z]}>
           <MapPin />
         </group>
       ))}

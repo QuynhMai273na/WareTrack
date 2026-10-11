@@ -22,20 +22,20 @@ export interface MovementInput {
  */
 @Injectable()
 export class MovementService {
-  async record(tx: Tx, m: MovementInput) {
+  async record(tx: Tx, movement: MovementInput) {
     return tx.movementRecord.create({
       data: {
-        siteId: m.siteId,
-        subjectType: m.subjectType,
-        subjectId: m.subjectId,
-        fromLocationId: m.fromLocationId,
-        toLocationId: m.toLocationId,
-        positionSource: m.positionSource,
-        confidence: m.confidence ?? null,
-        reason: m.reason,
+        siteId: movement.siteId,
+        subjectType: movement.subjectType,
+        subjectId: movement.subjectId,
+        fromLocationId: movement.fromLocationId,
+        toLocationId: movement.toLocationId,
+        positionSource: movement.positionSource,
+        confidence: movement.confidence ?? null,
+        reason: movement.reason,
         actorId: currentContext()?.principal?.userId ?? null,
-        taskId: m.taskId ?? null,
-        occurredAt: m.occurredAt ?? new Date(),
+        taskId: movement.taskId ?? null,
+        occurredAt: movement.occurredAt ?? new Date(),
       },
     });
   }

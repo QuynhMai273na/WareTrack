@@ -15,11 +15,11 @@ const COOKIE = 'wt_refresh';
 const COOKIE_PATH = '/api/v1/auth';
 
 function setRefreshCookie(res: Response, tokens: IssuedTokens) {
-  const e = env();
+  const environment = env();
   res.cookie(COOKIE, tokens.refreshToken, {
     httpOnly: true,
-    secure: e.COOKIE_SECURE,
-    sameSite: e.COOKIE_SAMESITE,
+    secure: environment.COOKIE_SECURE,
+    sameSite: environment.COOKIE_SAMESITE,
     path: COOKIE_PATH,
     expires: tokens.refreshExpiresAt,
   });

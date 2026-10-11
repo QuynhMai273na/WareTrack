@@ -91,10 +91,10 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
         FOR UPDATE SKIP LOCKED`;
       if (rows.length === 0) return 0;
       const bySite = new Map<string, bigint[]>();
-      for (const r of rows) {
-        const list = bySite.get(r.site_id) ?? [];
-        list.push(r.id);
-        bySite.set(r.site_id, list);
+      for (const row of rows) {
+        const list = bySite.get(row.site_id) ?? [];
+        list.push(row.id);
+        bySite.set(row.site_id, list);
       }
       for (const [siteId, ids] of bySite) {
         const [{ last_seq }] = await tx.$queryRaw<{ last_seq: bigint }[]>`

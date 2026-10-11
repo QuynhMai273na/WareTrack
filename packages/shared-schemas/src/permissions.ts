@@ -103,7 +103,7 @@ export type Permission = keyof typeof PERMISSION_MATRIX;
 export const ALL_PERMISSIONS = Object.keys(PERMISSION_MATRIX) as Permission[];
 
 export function permissionsForRole(role: Role): Permission[] {
-  return ALL_PERMISSIONS.filter((p) => (PERMISSION_MATRIX[p] as readonly Role[]).includes(role));
+  return ALL_PERMISSIONS.filter((permission) => (PERMISSION_MATRIX[permission] as readonly Role[]).includes(role));
 }
 
 export const ROLE_LABELS: Record<Role, { vi: string; en: string }> = {

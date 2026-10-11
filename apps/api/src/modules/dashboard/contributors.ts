@@ -15,11 +15,11 @@ export class DashboardContributors {
   readonly snapshot: SnapshotContributor[] = [];
   readonly kpis: KpiContributor[] = [];
 
-  addSnapshot(c: SnapshotContributor) {
-    this.snapshot.push(c);
+  addSnapshot(contributor: SnapshotContributor) {
+    this.snapshot.push(contributor);
   }
 
-  addKpis(c: KpiContributor) {
-    this.kpis.push(c);
+  addKpis(contributor: KpiContributor) {
+    this.kpis.push(contributor);
   }
 }

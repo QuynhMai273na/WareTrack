@@ -12,7 +12,7 @@ export function startOfTodayInTz(timeZone: string, now = new Date()): Date {
     second: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(now);
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  const get = (partType: string) => Number(parts.find((part) => part.type === partType)?.value);
   const localAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
   const offsetMs = localAsUtc - now.getTime();
   const localMidnightAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'));

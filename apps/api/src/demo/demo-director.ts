@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
-import type { TruckVisit, TruckVisitStatus } from '@prisma/client';
+import type { Prisma, TruckVisit, TruckVisitStatus } from '@prisma/client';
 import { DEFAULT_GATE_DOCUMENT_CHECKLIST } from '@waretrack/shared-schemas';
 import { PrismaService, TxRunner } from '../platform/prisma/prisma.service';
 import { EquipmentService } from '../modules/equipment/equipment.service';
@@ -59,11 +59,11 @@ export class DemoDirector implements OnApplicationShutdown {
     for (;;) {
       const done = await this.prisma.siteSetting.findFirst({ where: { key: 'seed.completedAt' } }).catch(() => null);
       if (done) break;
-      await new Promise((r) => setTimeout(r, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
     try {
       const sites = await this.prisma.site.findMany({ where: { deletedAt: null } });
-      for (const s of sites) this.siteIds.set(s.code, s.id);
+      for (const site of sites) this.siteIds.set(site.code, site.id);
       await this.bootstrap();
     } catch (err) {
       this.logger.error(`Bootstrap failed: ${(err as Error).message}`);
@@ -85,9 +85,9 @@ export class DemoDirector implements OnApplicationShutdown {
     if (hit) return hit;
     const res = await fetch(`${this.base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: user, password: DEMO_PASSWORD }) });
     if (!res.ok) throw new Error(`login ${user} → ${res.status}`);
-    const t = ((await res.json()) as { accessToken: string }).accessToken;
-    this.tokens.set(user, t);
-    return t;
+    const accessToken = ((await res.json()) as { accessToken: string }).accessToken;
+    this.tokens.set(user, accessToken);
+    return accessToken;
   }
 
   private async call<T = Record<string, unknown>>(user: string, method: 'GET' | 'POST', path: string, body?: unknown, retry = true): Promise<T> {
@@ -104,7 +104,7 @@ export class DemoDirector implements OnApplicationShutdown {
     return json as T;
   }
 
-  private S(code: string) {
+  private sitePath(code: string) {
     return `/sites/${this.siteIds.get(code)}`;
   }
 
@@ -117,7 +117,7 @@ export class DemoDirector implements OnApplicationShutdown {
    * nếu không lô hàng mới sẽ trùng mã (CODE_ALREADY_EXISTS) và mọi xe kẹt ở dock.
    */
   private async syncShipmentCounter() {
-    const scripted = DEMO_SCENES.flatMap((sc) => [...sc.outbound, ...sc.inbound].map((x) => x.shipment));
+    const scripted = DEMO_SCENES.flatMap((sc) => [...sc.outbound, ...sc.inbound].map((shipmentPlan) => shipmentPlan.shipment));
     const top = Math.max(0, ...scripted);
     const current = await this.prisma.codeCounter.findUnique({ where: { scope: 'SHP' } });
     if (!current || current.value < top) await this.setShipmentCode(top + 1);
@@ -142,28 +142,28 @@ export class DemoDirector implements OnApplicationShutdown {
   /** Người lái của xe nâng (để làm assignee task). */
   private async operatorFor(siteId: string, forkliftCode?: string) {
     // Người lái không đang dở task nào (BR-27: một người chỉ một task IN_PROGRESS)
-    const busy = new Set((await this.prisma.operationTask.findMany({ where: { status: 'IN_PROGRESS', assigneeId: { not: null } }, select: { assigneeId: true } })).map((t) => t.assigneeId!));
+    const busy = new Set((await this.prisma.operationTask.findMany({ where: { status: 'IN_PROGRESS', assigneeId: { not: null } }, select: { assigneeId: true } })).map((task) => task.assigneeId!));
     const fleet = await this.prisma.equipment.findMany({ where: { siteId, currentOperatorId: { not: null } }, orderBy: { code: 'asc' } });
-    const preferred = forkliftCode ? fleet.find((e) => e.code === forkliftCode) : undefined;
-    const pick = [preferred, ...fleet].find((e) => e && !busy.has(e.currentOperatorId!));
+    const preferred = forkliftCode ? fleet.find((forklift) => forklift.code === forkliftCode) : undefined;
+    const pick = [preferred, ...fleet].find((forklift) => forklift && !busy.has(forklift.currentOperatorId!));
     return pick ? this.prisma.user.findUnique({ where: { id: pick.currentOperatorId! } }) : null;
   }
 
   /** Thực hiện một task (assign → start → xác nhận nguồn → xác nhận đích) bằng tài khoản người lái. */
   private async runTask(site: string, taskId: string, operator: { id: string; username: string }, destCode?: string) {
-    const S = this.S(site);
-    let task = await this.call<{ id: string; version: number; status: string; from: { qrValue: string } | null; to: { qrValue: string; code: string } | null; subject: { code: string } }>('manager', 'GET', `${S}/tasks/${taskId}`);
+    const sitePath = this.sitePath(site);
+    let task = await this.call<{ id: string; version: number; status: string; from: { qrValue: string } | null; to: { qrValue: string; code: string } | null; subject: { code: string } }>('manager', 'GET', `${sitePath}/tasks/${taskId}`);
     // Task dở dang của người khác → để người đó làm tiếp
     if (task.status === 'IN_PROGRESS') {
-      const t = await this.prisma.operationTask.findUnique({ where: { id: taskId } });
-      const assignee = t?.assigneeId ? await this.prisma.user.findUnique({ where: { id: t.assigneeId } }) : null;
+      const storedTask = await this.prisma.operationTask.findUnique({ where: { id: taskId } });
+      const assignee = storedTask?.assigneeId ? await this.prisma.user.findUnique({ where: { id: storedTask.assigneeId } }) : null;
       if (assignee) operator = assignee;
     }
-    if (task.status === 'PENDING') task = await this.call('manager', 'POST', `${S}/tasks/${taskId}/assign`, { assigneeId: operator.id, expectedVersion: task.version });
-    if (task.status === 'ASSIGNED') task = await this.call(operator.username, 'POST', `${S}/tasks/${taskId}/start`, { expectedVersion: task.version });
-    if (task.from) await this.call(operator.username, 'POST', `${S}/tasks/${taskId}/confirm-source`, { locationScan: task.from.qrValue, subjectScan: task.subject.code });
+    if (task.status === 'PENDING') task = await this.call('manager', 'POST', `${sitePath}/tasks/${taskId}/assign`, { assigneeId: operator.id, expectedVersion: task.version });
+    if (task.status === 'ASSIGNED') task = await this.call(operator.username, 'POST', `${sitePath}/tasks/${taskId}/start`, { expectedVersion: task.version });
+    if (task.from) await this.call(operator.username, 'POST', `${sitePath}/tasks/${taskId}/confirm-source`, { locationScan: task.from.qrValue, subjectScan: task.subject.code });
     const dest = destCode ? await this.prisma.location.findFirst({ where: { siteId: this.siteIds.get(site), code: destCode } }) : null;
-    await this.call(operator.username, 'POST', `${S}/tasks/${taskId}/confirm-destination`, { locationScan: dest?.qrValue ?? task.to!.qrValue });
+    await this.call(operator.username, 'POST', `${sitePath}/tasks/${taskId}/confirm-destination`, { locationScan: dest?.qrValue ?? task.to!.qrValue });
   }
 
   /**
@@ -173,7 +173,7 @@ export class DemoDirector implements OnApplicationShutdown {
   private async backdateMilestones(visitId: string, direction: 'INBOUND' | 'OUTBOUND') {
     const ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: visitId, direction }, orderBy: { createdAt: 'desc' } });
     if (!ship) return;
-    const ago = (m: number) => new Date(Date.now() - m * 60_000);
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000);
     const jitter = () => Math.floor(Math.random() * 12);
     // Bảng milestone là append-only → chỉ THÊM mốc sớm hơn (đơn tạo ở ERP, soạn xong trước giờ demo); stepper lấy mốc sớm nhất
     if (direction === 'OUTBOUND') {
@@ -219,15 +219,15 @@ export class DemoDirector implements OnApplicationShutdown {
       if (!siteId) continue;
       // ETA của xe đang tới tính lại theo giờ khởi động
       for (const [truck, min] of Object.entries(scene.etas)) {
-        const v = await this.visitOf(scene.code, truck);
-        if (v) await this.prisma.truckVisit.update({ where: { id: v.id }, data: { etaAt: new Date(Date.now() + min * 60_000), appointmentStart: new Date(Date.now() + min * 60_000), appointmentEnd: new Date(Date.now() + (min + 60) * 60_000) } });
+        const visit = await this.visitOf(scene.code, truck);
+        if (visit) await this.prisma.truckVisit.update({ where: { id: visit.id }, data: { etaAt: new Date(Date.now() + min * 60_000), appointmentStart: new Date(Date.now() + min * 60_000), appointmentEnd: new Date(Date.now() + (min + 60) * 60_000) } });
       }
-      for (const o of scene.outbound) await this.safe(`${scene.code} ${o.truck}`, () => this.setupOutbound(scene, o));
-      for (const i of scene.inbound) await this.safe(`${scene.code} ${i.truck}`, () => this.setupInbound(scene, i));
+      for (const outboundPlan of scene.outbound) await this.safe(`${scene.code} ${outboundPlan.truck}`, () => this.setupOutbound(scene, outboundPlan));
+      for (const inboundPlan of scene.inbound) await this.safe(`${scene.code} ${inboundPlan.truck}`, () => this.setupInbound(scene, inboundPlan));
       for (const [truck, fl] of Object.entries(scene.forklifts)) {
-        const v = await this.visitOf(scene.code, truck);
+        const visit = await this.visitOf(scene.code, truck);
         const eq = await this.prisma.equipment.findFirst({ where: { siteId, code: fl } });
-        if (v && eq) this.forkliftOf.set(v.id, eq.id);
+        if (visit && eq) this.forkliftOf.set(visit.id, eq.id);
       }
     }
     await this.syncShipmentCounter();
@@ -239,42 +239,42 @@ export class DemoDirector implements OnApplicationShutdown {
     try {
       await fn();
     } catch (err) {
-      const e = err as Error;
-      this.logger.warn(`${label}: ${e.message || String(err)} ${(e.stack ?? '').split(String.fromCharCode(10)).slice(1, 3).join(' | ')}`);
+      const error = err as Error;
+      this.logger.warn(`${label}: ${error.message || String(err)} ${(error.stack ?? '').split(String.fromCharCode(10)).slice(1, 3).join(' | ')}`);
     }
   }
 
-  private async setupOutbound(scene: SiteScene, o: SiteScene['outbound'][number]) {
-    const S = this.S(scene.code);
+  private async setupOutbound(scene: SiteScene, outboundPlan: SiteScene['outbound'][number]) {
+    const sitePath = this.sitePath(scene.code);
     const siteId = this.siteIds.get(scene.code)!;
-    const visit = await this.visitOf(scene.code, o.truck);
+    const visit = await this.visitOf(scene.code, outboundPlan.truck);
     if (!visit) return;
     const sku = await this.sku(scene.sku);
-    await this.setShipmentCode(o.shipment);
-    const order = await this.call<{ id: string; version: number }>('manager', 'POST', `${S}/outbound-orders`, {
-      customerId: await this.partnerId(o.customer),
-      destinationText: o.destination,
-      plannedDispatchAt: new Date(Date.now() + o.dispatchInMin * 60_000).toISOString(),
-      requestedDeliveryAt: new Date(Date.now() + (o.dispatchInMin + 32) * 60_000).toISOString(),
+    await this.setShipmentCode(outboundPlan.shipment);
+    const order = await this.call<{ id: string; version: number }>('manager', 'POST', `${sitePath}/outbound-orders`, {
+      customerId: await this.partnerId(outboundPlan.customer),
+      destinationText: outboundPlan.destination,
+      plannedDispatchAt: new Date(Date.now() + outboundPlan.dispatchInMin * 60_000).toISOString(),
+      requestedDeliveryAt: new Date(Date.now() + (outboundPlan.dispatchInMin + 32) * 60_000).toISOString(),
       truckVisitId: visit.id,
-      lines: [{ skuId: sku.id, orderedQty: String(o.pallets * this.perPallet(scene.sku)) }],
+      lines: [{ skuId: sku.id, orderedQty: String(outboundPlan.pallets * this.perPallet(scene.sku)) }],
     });
-    await this.call('manager', 'POST', `${S}/outbound-orders/${order.id}/confirm`, { autoAllocate: true, expectedVersion: order.version });
+    await this.call('manager', 'POST', `${sitePath}/outbound-orders/${order.id}/confirm`, { autoAllocate: true, expectedVersion: order.version });
     const picks = await this.prisma.operationTask.findMany({ where: { siteId, sourceType: 'OUTBOUND_ORDER', sourceId: order.id, taskType: 'PICK', status: 'PENDING' }, orderBy: { code: 'asc' } });
-    const operator = await this.operatorFor(siteId, scene.forklifts[o.truck]);
+    const operator = await this.operatorFor(siteId, scene.forklifts[outboundPlan.truck]);
     if (!operator) return;
     // Pallet nguyên → mỗi pick một pallet; nếu cấp phát tách nhiều pallet hơn thì pick hết khi cần bắt đầu xếp
-    const n = o.picked !== undefined && !o.startLoading ? o.picked : picks.length;
-    for (let i = 0; i < Math.min(n, picks.length); i++) await this.runTask(scene.code, picks[i].id, operator, await this.freeSlot(scene));
+    const pickCount = outboundPlan.picked !== undefined && !outboundPlan.startLoading ? outboundPlan.picked : picks.length;
+    for (let index = 0; index < Math.min(pickCount, picks.length); index++) await this.runTask(scene.code, picks[index].id, operator, await this.freeSlot(scene));
     await this.backdateMilestones(visit.id, 'OUTBOUND');
-    if (!o.startLoading) return;
+    if (!outboundPlan.startLoading) return;
     const ship = await this.prisma.shipment.findFirstOrThrow({ where: { truckVisitId: visit.id, direction: 'OUTBOUND', status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
-    await this.call('manager', 'POST', `${S}/shipments/${ship.id}/loading/start`, { expectedVersion: ship.version });
+    await this.call('manager', 'POST', `${sitePath}/shipments/${ship.id}/loading/start`, { expectedVersion: ship.version });
     const dock = await this.prisma.location.findUniqueOrThrow({ where: { id: visit.dockLocationId! } });
     const items = await this.prisma.shipmentItem.findMany({ where: { shipmentId: ship.id, loadedAt: null }, include: {} });
-    for (const item of items.slice(0, o.loaded)) {
+    for (const item of items.slice(0, outboundPlan.loaded)) {
       const hu = await this.prisma.handlingUnit.findUniqueOrThrow({ where: { id: item.handlingUnitId! } });
-      await this.call(operator.username, 'POST', `${S}/shipments/${ship.id}/load-scans`, { huScan: { method: 'BARCODE', value: hu.code, scannedAt: this.now() }, dockScan: { method: 'QR', value: dock.qrValue, scannedAt: this.now() } });
+      await this.call(operator.username, 'POST', `${sitePath}/shipments/${ship.id}/load-scans`, { huScan: { method: 'BARCODE', value: hu.code, scannedAt: this.now() }, dockScan: { method: 'QR', value: dock.qrValue, scannedAt: this.now() } });
     }
   }
 
@@ -282,38 +282,45 @@ export class DemoDirector implements OnApplicationShutdown {
   private async freeSlot(scene: SiteScene): Promise<string | undefined> {
     if (!scene.stagingSlots.length) return undefined;
     const siteId = this.siteIds.get(scene.code)!;
-    const locs = await this.prisma.location.findMany({ where: { siteId, code: { in: scene.stagingSlots } } });
-    const used = await this.prisma.locationOccupancy.groupBy({ by: ['locationId'], where: { releasedAt: null, locationId: { in: locs.map((l) => l.id) } }, _sum: { unitsUsed: true } });
-    const usedBy = new Map(used.map((u) => [u.locationId, Number(u._sum.unitsUsed ?? 0)]));
-    const ordered = scene.stagingSlots.map((c) => locs.find((l) => l.code === c)!).filter(Boolean);
-    const free = ordered.filter((l) => (usedBy.get(l.id) ?? 0) < Number(l.capacityUnits));
-    return (free.length ? free[Math.floor(Math.random() * Math.min(free.length, 3))] : ordered[0])?.code;
+    // Ưu tiên ô staging của kịch bản; hết chỗ thì lấy bất kỳ ô staging nào còn chỗ (không chọn ô đầy → task kẹt)
+    return (await this.locationWithRoom(siteId, { code: { in: scene.stagingSlots } }, scene.stagingSlots, true)) ?? (await this.locationWithRoom(siteId, { locationType: 'STAGING' }));
   }
 
-  private async setupInbound(scene: SiteScene, i: SiteScene['inbound'][number]) {
-    const S = this.S(scene.code);
-    const visit = await this.visitOf(scene.code, i.truck);
+  /** Vị trí còn chỗ trống (theo occupancy) trong tập điều kiện; `preferredOrder` giữ thứ tự ưu tiên, `spread` chọn ngẫu nhiên trong 3 ô đầu cho tự nhiên. */
+  private async locationWithRoom(siteId: string, where: Prisma.LocationWhereInput, preferredOrder?: string[], spread = false): Promise<string | undefined> {
+    const candidates = await this.prisma.location.findMany({ where: { siteId, deletedAt: null, blockedAt: null, ...where }, orderBy: { code: 'asc' }, take: 500 });
+    const usage = await this.prisma.locationOccupancy.groupBy({ by: ['locationId'], where: { releasedAt: null, locationId: { in: candidates.map((location) => location.id) } }, _sum: { unitsUsed: true } });
+    const usedUnits = new Map(usage.map((entry) => [entry.locationId, Number(entry._sum.unitsUsed ?? 0)]));
+    const ordered = preferredOrder ? preferredOrder.map((code) => candidates.find((location) => location.code === code)).filter((location): location is (typeof candidates)[number] => !!location) : candidates;
+    const withRoom = ordered.filter((location) => (usedUnits.get(location.id) ?? 0) < Number(location.capacityUnits));
+    if (!withRoom.length) return undefined;
+    return (spread ? withRoom[Math.floor(Math.random() * Math.min(withRoom.length, 3))] : withRoom[0]).code;
+  }
+
+  private async setupInbound(scene: SiteScene, inboundPlan: SiteScene['inbound'][number]) {
+    const sitePath = this.sitePath(scene.code);
+    const visit = await this.visitOf(scene.code, inboundPlan.truck);
     if (!visit) return;
     const sku = await this.sku(scene.sku);
-    await this.setShipmentCode(i.shipment);
-    const order = await this.call<{ id: string }>('manager', 'POST', `${S}/inbound-orders`, {
-      supplierId: await this.partnerId(i.partner),
+    await this.setShipmentCode(inboundPlan.shipment);
+    const order = await this.call<{ id: string }>('manager', 'POST', `${sitePath}/inbound-orders`, {
+      supplierId: await this.partnerId(inboundPlan.partner),
       truckVisitId: visit.id,
-      lines: [{ skuId: sku.id, expectedQty: String(i.pallets * this.perPallet(scene.sku)), expectedHuCount: i.pallets }],
+      lines: [{ skuId: sku.id, expectedQty: String(inboundPlan.pallets * this.perPallet(scene.sku)), expectedHuCount: inboundPlan.pallets }],
     });
     await this.backdateMilestones(visit.id, 'INBOUND');
-    if (!i.startReceipt) return;
-    const receipt = await this.call<{ id: string }>('manager', 'POST', `${S}/receipts`, { inboundOrderId: order.id });
-    for (let k = 0; k < i.received; k++) await this.call('manager', 'POST', `${S}/receipts/${receipt.id}/lines`, this.receiptLine(sku));
+    if (!inboundPlan.startReceipt) return;
+    const receipt = await this.call<{ id: string }>('manager', 'POST', `${sitePath}/receipts`, { inboundOrderId: order.id });
+    for (let lineIndex = 0; lineIndex < inboundPlan.received; lineIndex++) await this.call('manager', 'POST', `${sitePath}/receipts/${receipt.id}/lines`, this.receiptLine(sku));
   }
 
   private receiptLine(sku: { id: string; code: string; lotTracked: boolean; expiryTracked: boolean }) {
-    const d = new Date(Date.now() + 200 * 86_400_000);
+    const expiryDate = new Date(Date.now() + 200 * 86_400_000);
     return {
       skuId: sku.id,
       quantity: String(this.perPallet(sku.code)),
       ...(sku.lotTracked ? { lotNumber: `L2510-${String(Math.floor(Math.random() * 900) + 100)}` } : {}),
-      ...(sku.expiryTracked ? { expiresOn: d.toISOString().slice(0, 10) } : {}),
+      ...(sku.expiryTracked ? { expiresOn: expiryDate.toISOString().slice(0, 10) } : {}),
     };
   }
 
@@ -329,7 +336,7 @@ export class DemoDirector implements OnApplicationShutdown {
       this.mem.clear();
       this.forkliftOf.clear();
       this.tokens.clear();
-      for (const s of await this.prisma.site.findMany({ where: { deletedAt: null } })) this.siteIds.set(s.code, s.id);
+      for (const site of await this.prisma.site.findMany({ where: { deletedAt: null } })) this.siteIds.set(site.code, site.id);
       await this.bootstrap();
     }
     for (const scene of DEMO_SCENES) {
@@ -339,61 +346,61 @@ export class DemoDirector implements OnApplicationShutdown {
     }
   }
 
-  private memOf(v: TruckVisit): Mem {
-    const m = this.mem.get(v.id);
-    if (!m || m.status !== v.status) {
-      const fresh = { status: v.status, since: Date.now(), lastStep: Date.now() };
-      this.mem.set(v.id, fresh);
+  private memOf(visit: TruckVisit): Mem {
+    const memory = this.mem.get(visit.id);
+    if (!memory || memory.status !== visit.status) {
+      const fresh = { status: visit.status, since: Date.now(), lastStep: Date.now() };
+      this.mem.set(visit.id, fresh);
       return fresh;
     }
-    return m;
+    return memory;
   }
 
   private async tickSite(scene: SiteScene, siteId: string) {
-    const S = this.S(scene.code);
+    const sitePath = this.sitePath(scene.code);
     const visits = await this.prisma.truckVisit.findMany({ where: { siteId, status: { in: ACTIVE } }, include: { truck: true }, orderBy: { createdAt: 'asc' } });
     const now = Date.now();
-    for (const v of visits) {
-      const m = this.memOf(v);
-      const age = now - m.since;
+    for (const visit of visits) {
+      const memory = this.memOf(visit);
+      const age = now - memory.since;
       try {
-        switch (v.status) {
+        switch (visit.status) {
           case 'SCHEDULED':
-            if (v.etaAt && v.etaAt.getTime() <= now) await this.call('manager', 'POST', `${S}/visits/${v.id}/arrive`, { actualPlate: v.truck.plateNumber, expectedVersion: v.version });
+            if (visit.etaAt && visit.etaAt.getTime() <= now) await this.call('manager', 'POST', `${sitePath}/visits/${visit.id}/arrive`, { actualPlate: visit.truck.plateNumber, expectedVersion: visit.version });
             break;
           case 'AT_GATE':
-            if (age > DWELL.gate) await this.call('manager', 'POST', `${S}/visits/${v.id}/verify`, { documentChecks: DEFAULT_GATE_DOCUMENT_CHECKLIST.map((c) => ({ key: c.key, passed: true })), expectedVersion: v.version });
+            if (age > DWELL.gate) await this.call('manager', 'POST', `${sitePath}/visits/${visit.id}/verify`, { documentChecks: DEFAULT_GATE_DOCUMENT_CHECKLIST.map((check) => ({ key: check.key, passed: true })), expectedVersion: visit.version });
             break;
           case 'WAITING': {
-            const dock = await this.freeDock(siteId, v.direction);
-            if (dock) await this.call('manager', 'POST', `${S}/visits/${v.id}/assign-dock`, { dockLocationId: dock, expectedVersion: v.version });
+            const dock = await this.freeDock(siteId, visit.direction);
+            if (dock) await this.call('manager', 'POST', `${sitePath}/visits/${visit.id}/assign-dock`, { dockLocationId: dock, expectedVersion: visit.version });
             break;
           }
           case 'DOCK_ASSIGNED':
-            if (age > DWELL.docking && v.dockLocationId) {
-              const dock = await this.prisma.location.findUniqueOrThrow({ where: { id: v.dockLocationId } });
-              await this.call('manager', 'POST', `${S}/visits/${v.id}/arrive-at-dock`, { scan: { method: 'QR', value: dock.qrValue, scannedAt: this.now() }, expectedVersion: v.version });
+            if (age > DWELL.docking && visit.dockLocationId) {
+              const dock = await this.prisma.location.findUniqueOrThrow({ where: { id: visit.dockLocationId } });
+              await this.call('manager', 'POST', `${sitePath}/visits/${visit.id}/arrive-at-dock`, { scan: { method: 'QR', value: dock.qrValue, scannedAt: this.now() }, expectedVersion: visit.version });
             }
             break;
           case 'AT_DOCK':
-            if (age > DWELL.atDock) await this.startHandling(scene, siteId, v);
+            if (age > DWELL.atDock) await this.startHandling(scene, siteId, visit);
             break;
           case 'HANDLING':
-            if (now - m.lastStep > DWELL.step) {
-              m.lastStep = now;
-              await this.handleStep(scene, siteId, v);
+            if (now - memory.lastStep > DWELL.step) {
+              memory.lastStep = now;
+              await this.handleStep(scene, siteId, visit);
             }
             break;
           case 'READY_TO_LEAVE':
             if (age > DWELL.ready) {
-              await this.call('manager', 'POST', `${S}/visits/${v.id}/gate-out`, { expectedVersion: v.version });
-              await this.releaseForklift(siteId, v.id);
+              await this.call('manager', 'POST', `${sitePath}/visits/${visit.id}/gate-out`, { expectedVersion: visit.version });
+              await this.releaseForklift(siteId, visit.id);
             }
             break;
         }
       } catch (err) {
-        this.logger.warn(`${scene.code} ${v.truck.code} ${v.status}: ${(err as Error).message}`);
-        m.lastStep = now;
+        this.logger.warn(`${scene.code} ${visit.truck.code} ${visit.status}: ${(err as Error).message}`);
+        memory.lastStep = now;
       }
     }
     await this.safe(`${scene.code} putaway`, () => this.putawayOne(scene, siteId));
@@ -402,8 +409,8 @@ export class DemoDirector implements OnApplicationShutdown {
 
   private async freeDock(siteId: string, direction: string) {
     const docks = await this.prisma.location.findMany({ where: { siteId, locationType: 'DOCK', deletedAt: null, blockedAt: null }, include: { dock: true }, orderBy: { code: 'asc' } });
-    const busy = new Set((await this.prisma.locationOccupancy.findMany({ where: { siteId, releasedAt: null, locationId: { in: docks.map((d) => d.id) } } })).map((o) => o.locationId));
-    const fit = docks.filter((d) => !busy.has(d.id) && (d.dock?.direction === 'BOTH' || d.dock?.direction === direction));
+    const busy = new Set((await this.prisma.locationOccupancy.findMany({ where: { siteId, releasedAt: null, locationId: { in: docks.map((dock) => dock.id) } } })).map((occupancy) => occupancy.locationId));
+    const fit = docks.filter((dock) => !busy.has(dock.id) && (dock.dock?.direction === 'BOTH' || dock.dock?.direction === direction));
     return fit[0]?.id ?? null;
   }
 
@@ -413,7 +420,7 @@ export class DemoDirector implements OnApplicationShutdown {
     if (!eqId) {
       const taken = new Set(this.forkliftOf.values());
       const free = await this.prisma.equipment.findMany({ where: { siteId, status: { in: ['AVAILABLE', 'CHARGING'] }, deletedAt: null }, orderBy: [{ status: 'asc' }, { code: 'asc' }] });
-      const eq = free.find((e) => !taken.has(e.id) && e.status === 'AVAILABLE') ?? free.find((e) => !taken.has(e.id));
+      const eq = free.find((forklift) => !taken.has(forklift.id) && forklift.status === 'AVAILABLE') ?? free.find((forklift) => !taken.has(forklift.id));
       if (!eq) return null;
       eqId = eq.id;
       this.forkliftOf.set(visit.id, eqId);
@@ -437,118 +444,121 @@ export class DemoDirector implements OnApplicationShutdown {
     if (eq?.status === 'BUSY') await this.tx.run((tx) => this.equipment.setStatus(tx, siteId, eq.id, 'AVAILABLE', { taskSummary: 'Waiting for work' }));
   }
 
-  private async startHandling(scene: SiteScene, siteId: string, v: TruckVisit & { truck: { code: string } }) {
-    const S = this.S(scene.code);
-    if (v.direction === 'OUTBOUND') {
-      let ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: v.id, direction: 'OUTBOUND', status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
+  private async startHandling(scene: SiteScene, siteId: string, visit: TruckVisit & { truck: { code: string } }) {
+    const sitePath = this.sitePath(scene.code);
+    if (visit.direction === 'OUTBOUND') {
+      let ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: visit.id, direction: 'OUTBOUND', status: { notIn: ['DELIVERED', 'CANCELLED'] } } });
       if (!ship) {
         const sku = await this.sku(scene.sku);
         const pallets = 4 + Math.floor(Math.random() * 3);
-        const order = await this.call<{ id: string; version: number }>('manager', 'POST', `${S}/outbound-orders`, {
+        const order = await this.call<{ id: string; version: number }>('manager', 'POST', `${sitePath}/outbound-orders`, {
           customerId: await this.partnerId(['Oakridge Market', 'Harbor & Co.', 'Sunvale Grocers', 'Halcyon Retail'][Math.floor(Math.random() * 4)]),
           destinationText: ['Philadelphia, PA', 'Providence, RI', 'Hartford, CT', 'Stamford, CT', 'Trenton, NJ'][Math.floor(Math.random() * 5)],
           plannedDispatchAt: new Date(Date.now() + 25 * 60_000).toISOString(),
           requestedDeliveryAt: new Date(Date.now() + 90 * 60_000).toISOString(),
-          truckVisitId: v.id,
+          truckVisitId: visit.id,
           lines: [{ skuId: sku.id, orderedQty: String(pallets * this.perPallet(scene.sku)) }],
         });
-        await this.call('manager', 'POST', `${S}/outbound-orders/${order.id}/confirm`, { autoAllocate: true, expectedVersion: order.version });
-        await this.backdateMilestones(v.id, 'OUTBOUND');
+        await this.call('manager', 'POST', `${sitePath}/outbound-orders/${order.id}/confirm`, { autoAllocate: true, expectedVersion: order.version });
+        await this.backdateMilestones(visit.id, 'OUTBOUND');
         return;
       }
-      if (ship.status === 'PICKING' || ship.status === 'CONFIRMED') return this.pickOne(scene, siteId, v, ship.id);
-      if (ship.status === 'STAGED') await this.call('manager', 'POST', `${S}/shipments/${ship.id}/loading/start`, { expectedVersion: ship.version });
+      if (ship.status === 'PICKING' || ship.status === 'CONFIRMED') return this.pickOne(scene, siteId, visit, ship.id);
+      if (ship.status === 'STAGED') await this.call('manager', 'POST', `${sitePath}/shipments/${ship.id}/loading/start`, { expectedVersion: ship.version });
       return;
     }
     // Nhập: đảm bảo có đơn nhập + mở phiếu nhận
-    let ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: v.id, direction: 'INBOUND', status: { notIn: ['CLOSED', 'CANCELLED'] } } });
+    let ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: visit.id, direction: 'INBOUND', status: { notIn: ['CLOSED', 'CANCELLED'] } } });
     if (!ship) {
       const sku = await this.sku(scene.sku);
       const pallets = 4 + Math.floor(Math.random() * 4);
-      await this.call('manager', 'POST', `${S}/inbound-orders`, { supplierId: await this.partnerId(['Northwind Supply', 'Brightline Electronics', 'Sunvale Grocers'][Math.floor(Math.random() * 3)]), truckVisitId: v.id, lines: [{ skuId: sku.id, expectedQty: String(pallets * this.perPallet(scene.sku)), expectedHuCount: pallets }] });
-      ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: v.id, direction: 'INBOUND' } });
-      await this.backdateMilestones(v.id, 'INBOUND');
+      await this.call('manager', 'POST', `${sitePath}/inbound-orders`, { supplierId: await this.partnerId(['Northwind Supply', 'Brightline Electronics', 'Sunvale Grocers'][Math.floor(Math.random() * 3)]), truckVisitId: visit.id, lines: [{ skuId: sku.id, expectedQty: String(pallets * this.perPallet(scene.sku)), expectedHuCount: pallets }] });
+      ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: visit.id, direction: 'INBOUND' } });
+      await this.backdateMilestones(visit.id, 'INBOUND');
     }
     const order = await this.prisma.inboundOrder.findFirst({ where: { shipmentId: ship!.id } });
-    if (order) await this.call('manager', 'POST', `${S}/receipts`, { inboundOrderId: order.id });
+    if (order) await this.call('manager', 'POST', `${sitePath}/receipts`, { inboundOrderId: order.id });
   }
 
-  private async pickOne(scene: SiteScene, siteId: string, v: TruckVisit & { truck: { code: string } }, shipmentId: string) {
+  private async pickOne(scene: SiteScene, siteId: string, visit: TruckVisit & { truck: { code: string } }, shipmentId: string) {
     const order = await this.prisma.outboundOrder.findFirst({ where: { shipmentId } });
     if (!order) return;
     const task = await this.prisma.operationTask.findFirst({ where: { siteId, sourceType: 'OUTBOUND_ORDER', sourceId: order.id, taskType: 'PICK', status: { in: ['PENDING', 'ASSIGNED', 'IN_PROGRESS'] } }, orderBy: { code: 'asc' } });
     if (!task) return;
-    const eq = await this.claimForklift(siteId, v, 'Loading');
-    const operator = await this.operatorFor(siteId, eq?.code);
+    const eq = await this.claimForklift(siteId, visit, 'Loading');
+    // Task đang dở: người được giao làm tiếp (họ bị tính là "bận" chính vì task này)
+    const assignee = task.assigneeId ? await this.prisma.user.findUnique({ where: { id: task.assigneeId } }) : null;
+    const operator = assignee ?? (await this.operatorFor(siteId, eq?.code));
     if (!operator) return;
     await this.runTask(scene.code, task.id, operator, await this.freeSlot(scene));
   }
 
-  private async handleStep(scene: SiteScene, siteId: string, v: TruckVisit & { truck: { code: string } }) {
-    const S = this.S(scene.code);
-    if (v.direction === 'OUTBOUND') {
-      const ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: v.id, direction: 'OUTBOUND', status: { notIn: ['DELIVERED', 'CANCELLED', 'DISPATCHED'] } } });
+  private async handleStep(scene: SiteScene, siteId: string, visit: TruckVisit & { truck: { code: string } }) {
+    const sitePath = this.sitePath(scene.code);
+    if (visit.direction === 'OUTBOUND') {
+      const ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: visit.id, direction: 'OUTBOUND', status: { notIn: ['DELIVERED', 'CANCELLED', 'DISPATCHED'] } } });
       if (!ship) return;
-      if (ship.status === 'PICKING') return this.pickOne(scene, siteId, v, ship.id);
-      if (ship.status === 'STAGED') return void (await this.call('manager', 'POST', `${S}/shipments/${ship.id}/loading/start`, { expectedVersion: ship.version }));
+      if (ship.status === 'PICKING') return this.pickOne(scene, siteId, visit, ship.id);
+      if (ship.status === 'STAGED') return void (await this.call('manager', 'POST', `${sitePath}/shipments/${ship.id}/loading/start`, { expectedVersion: ship.version }));
       if (ship.status !== 'LOADING') return;
-      const eq = await this.claimForklift(siteId, v, 'Loading');
+      const eq = await this.claimForklift(siteId, visit, 'Loading');
       const operator = (await this.operatorFor(siteId, eq?.code)) ?? { username: 'manager' };
       const next = await this.prisma.shipmentItem.findFirst({ where: { shipmentId: ship.id, loadedAt: null }, orderBy: { id: 'asc' } });
       if (next) {
         const hu = await this.prisma.handlingUnit.findUniqueOrThrow({ where: { id: next.handlingUnitId! } });
-        const dock = await this.prisma.location.findUniqueOrThrow({ where: { id: v.dockLocationId! } });
-        await this.call(operator.username, 'POST', `${S}/shipments/${ship.id}/load-scans`, { huScan: { method: 'BARCODE', value: hu.code, scannedAt: this.now() }, dockScan: { method: 'QR', value: dock.qrValue, scannedAt: this.now() } });
+        const dock = await this.prisma.location.findUniqueOrThrow({ where: { id: visit.dockLocationId! } });
+        await this.call(operator.username, 'POST', `${sitePath}/shipments/${ship.id}/load-scans`, { huScan: { method: 'BARCODE', value: hu.code, scannedAt: this.now() }, dockScan: { method: 'QR', value: dock.qrValue, scannedAt: this.now() } });
         return;
       }
-      await this.call('manager', 'POST', `${S}/shipments/${ship.id}/dispatch`, { sealNumber: `SL-${Math.floor(Math.random() * 900000 + 100000)}`, expectedVersion: ship.version });
+      await this.call('manager', 'POST', `${sitePath}/shipments/${ship.id}/dispatch`, { sealNumber: `SL-${Math.floor(Math.random() * 900000 + 100000)}`, expectedVersion: ship.version });
       return;
     }
     // Nhập: quét từng pallet; đủ thì hoàn tất phiếu nhận (xe READY_TO_LEAVE)
-    const ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: v.id, direction: 'INBOUND', status: { notIn: ['CLOSED', 'CANCELLED', 'RECEIVED'] } } });
+    const ship = await this.prisma.shipment.findFirst({ where: { truckVisitId: visit.id, direction: 'INBOUND', status: { notIn: ['CLOSED', 'CANCELLED', 'RECEIVED'] } } });
     if (!ship) return;
     const receipt = await this.prisma.receipt.findFirst({ where: { shipmentId: ship.id, status: 'IN_PROGRESS' } });
     if (!receipt) return;
-    await this.claimForklift(siteId, v, 'Unloading');
+    await this.claimForklift(siteId, visit, 'Unloading');
     const lines = await this.prisma.receiptLine.count({ where: { receiptId: receipt.id, voided: false } });
     if (lines < ship.expectedHuCount) {
-      await this.call('manager', 'POST', `${S}/receipts/${receipt.id}/lines`, this.receiptLine(await this.sku(scene.sku)));
+      await this.call('manager', 'POST', `${sitePath}/receipts/${receipt.id}/lines`, this.receiptLine(await this.sku(scene.sku)));
       return;
     }
-    await this.call('manager', 'POST', `${S}/receipts/${receipt.id}/complete`, {});
+    await this.call('manager', 'POST', `${sitePath}/receipts/${receipt.id}/complete`, {});
   }
 
   /** Cất hàng: mỗi nhịp một pallet nhận xong → kho trong nhà (biến khỏi scene) hoặc làn staging (cross-dock). */
   private async putawayOne(scene: SiteScene, siteId: string) {
-    const task = await this.prisma.operationTask.findFirst({ where: { siteId, taskType: 'PUTAWAY', status: 'PENDING', createdAt: { lt: new Date(Date.now() - DWELL.putaway) } }, orderBy: { createdAt: 'asc' } });
+    // Task đang dở (đích từng đầy) được làm tiếp trước — nếu bỏ qua, người lái bị giữ mãi và cả site đứng
+    const inProgress = await this.prisma.operationTask.findFirst({ where: { siteId, taskType: 'PUTAWAY', status: { in: ['IN_PROGRESS', 'ASSIGNED'] } }, orderBy: { createdAt: 'asc' } });
+    const task = inProgress ?? (await this.prisma.operationTask.findFirst({ where: { siteId, taskType: 'PUTAWAY', status: 'PENDING', createdAt: { lt: new Date(Date.now() - DWELL.putaway) } }, orderBy: { createdAt: 'asc' } }));
     if (!task) return;
-    const operator = await this.operatorFor(siteId);
+    const assignee = task.assigneeId ? await this.prisma.user.findUnique({ where: { id: task.assigneeId } }) : null;
+    const operator = assignee ?? (await this.operatorFor(siteId));
     if (!operator) return;
-    let dest: string | undefined;
-    if (scene.putaway === 'staging' && scene.stagingSlots.length) dest = await this.freeSlot(scene);
-    else {
-      const loc = await this.prisma.location.findFirst({ where: { siteId, code: { startsWith: scene.indoorPrefix }, locationType: 'STORAGE' }, orderBy: { code: 'desc' } });
-      dest = loc?.code;
-    }
-    await this.runTask(scene.code, task.id, operator, dest);
+    const destinationCode =
+      scene.putaway === 'staging' && scene.stagingSlots.length
+        ? await this.freeSlot(scene)
+        : await this.locationWithRoom(siteId, { code: { startsWith: scene.indoorPrefix }, locationType: 'STORAGE' });
+    await this.runTask(scene.code, task.id, operator, destinationCode);
   }
 
   /** Còn dock trống và không có xe nào sắp tới → sinh lượt xe mới (ETA ~100 s) chạy vào từ đường ngoài. */
   private async spawnIfIdle(scene: SiteScene, siteId: string, visits: Array<TruckVisit & { truck: { code: string } }>) {
-    const soon = visits.filter((v) => v.status === 'SCHEDULED' && v.etaAt && v.etaAt.getTime() - Date.now() < 6 * 60_000);
+    const soon = visits.filter((existingVisit) => existingVisit.status === 'SCHEDULED' && existingVisit.etaAt && existingVisit.etaAt.getTime() - Date.now() < 6 * 60_000);
     if (soon.length > 0) return;
-    const onSite = visits.filter((v) => v.status !== 'SCHEDULED').length;
+    const onSite = visits.filter((existingVisit) => existingVisit.status !== 'SCHEDULED').length;
     const docks = await this.prisma.location.count({ where: { siteId, locationType: 'DOCK', deletedAt: null } });
     if (onSite >= docks) return;
     const direction = scene.flow === 'both' ? (Math.random() < 0.5 ? 'INBOUND' : 'OUTBOUND') : scene.flow === 'inbound' ? 'INBOUND' : 'OUTBOUND';
     const dock = await this.freeDock(siteId, direction);
     if (!dock) return;
-    const activeTrucks = new Set((await this.prisma.truckVisit.findMany({ where: { status: { in: ACTIVE } }, select: { truckId: true } })).map((v) => v.truckId));
+    const activeTrucks = new Set((await this.prisma.truckVisit.findMany({ where: { status: { in: ACTIVE } }, select: { truckId: true } })).map((activeVisit) => activeVisit.truckId));
     const trucks = await this.prisma.truck.findMany({ where: { deletedAt: null, code: { startsWith: 'TRK-2' } }, orderBy: { updatedAt: 'asc' } });
-    const truck = trucks.find((t) => !activeTrucks.has(t.id));
+    const truck = trucks.find((candidateTruck) => !activeTrucks.has(candidateTruck.id));
     if (!truck) return;
     const eta = new Date(Date.now() + DWELL.spawnEta);
-    const visit = await this.call<{ id: string; version: number }>('manager', 'POST', `${this.S(scene.code)}/visits`, {
+    const visit = await this.call<{ id: string; version: number }>('manager', 'POST', `${this.sitePath(scene.code)}/visits`, {
       truckId: truck.id,
       direction,
       appointmentStart: eta.toISOString(),
@@ -556,6 +566,6 @@ export class DemoDirector implements OnApplicationShutdown {
       etaAt: eta.toISOString(),
     });
     await this.prisma.truck.update({ where: { id: truck.id }, data: { updatedAt: new Date() } });
-    await this.call('manager', 'POST', `${this.S(scene.code)}/visits/${visit.id}/assign-dock`, { dockLocationId: dock, expectedVersion: visit.version }).catch(() => undefined);
+    await this.call('manager', 'POST', `${this.sitePath(scene.code)}/visits/${visit.id}/assign-dock`, { dockLocationId: dock, expectedVersion: visit.version }).catch(() => undefined);
   }
 }

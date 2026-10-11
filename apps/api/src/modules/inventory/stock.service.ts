@@ -11,7 +11,7 @@ import { SitesService } from '../sites/sites.service';
 import { InventoryEvents } from './inventory-events.service';
 import { LedgerService } from './ledger.service';
 
-const D = Prisma.Decimal;
+const Decimal = Prisma.Decimal;
 
 const REVERSIBLE: Partial<Record<InventoryTxType, InventoryTxType>> = {
   RECEIPT: 'RECEIPT_REVERSAL',
@@ -41,12 +41,12 @@ export class StockService {
       if (bal.stockStatus === 'QUARANTINE' && body.toStatus === 'AVAILABLE' && !principal.permissions.has('inventory.status.release')) {
         throw DomainError.forbidden('Releasing quarantine requires Site Manager (inventory.status.release)');
       }
-      const free = new D(bal.qtyOnHand).minus(bal.qtyReserved);
-      if (bal.stockStatus === 'AVAILABLE' && new D(body.quantity).gt(free)) {
+      const free = new Decimal(bal.qtyOnHand).minus(bal.qtyReserved);
+      if (bal.stockStatus === 'AVAILABLE' && new Decimal(body.quantity).gt(free)) {
         throw DomainError.rule(ErrorCode.STOCK_RESERVED, `Only ${free.toFixed(3)} is unreserved — release reservations first`);
       }
       await this.sites.assertNotFrozen(tx, bal.locationId);
-      const r = await this.ledger.post(tx, {
+      const ledgerResult = await this.ledger.post(tx, {
         siteId,
         txType: 'STATUS_CHANGE',
         idempotencyKey: `status:${uuidv7()}`,
@@ -62,9 +62,9 @@ export class StockService {
         receivedAt: bal.receivedAt,
       });
       await this.audit.record(tx, { siteId, action: 'STOCK_STATUS_CHANGED', entityType: 'InventoryBalance', entityId: bal.id, diff: { before: { status: bal.stockStatus }, after: { status: body.toStatus, qty: body.quantity } }, reason: body.reason });
-      await this.events.inventoryUpdated(tx, siteId, r.changes, [r.tx.id]);
+      await this.events.inventoryUpdated(tx, siteId, ledgerResult.changes, [ledgerResult.tx.id]);
       if (bal.handlingUnitId) await this.events.palletMoved(tx, siteId, bal.handlingUnitId, bal.locationId, bal.locationId);
-      return r.changes;
+      return ledgerResult.changes;
     });
   }
 
@@ -74,9 +74,9 @@ export class StockService {
       const bal = await tx.inventoryBalance.findFirst({ where: { id: body.balanceId, siteId } });
       if (!bal) throw DomainError.notFound('Balance');
       const settings = await this.sites.settings(siteId, tx);
-      const delta = new D(body.qtyDelta);
-      const onHand = new D(bal.qtyOnHand);
-      const pct = onHand.gt(0) ? delta.abs().div(onHand).times(100) : new D(100);
+      const delta = new Decimal(body.qtyDelta);
+      const onHand = new Decimal(bal.qtyOnHand);
+      const pct = onHand.gt(0) ? delta.abs().div(onHand).times(100) : new Decimal(100);
       const requiresManager = delta.abs().gt(settings.adjustApprovalThreshold.maxUnits) || pct.gt(settings.adjustApprovalThreshold.maxPct);
       const adj = await tx.stockAdjustment.create({
         data: {
@@ -110,16 +110,16 @@ export class StockService {
         throw DomainError.forbidden('This adjustment exceeds the threshold and needs a Site Manager (DEC-14)');
       }
       const bal = await tx.inventoryBalance.findUniqueOrThrow({ where: { id: adj.balanceId } });
-      const delta = new D(adj.qtyDelta);
+      const delta = new Decimal(adj.qtyDelta);
       if (delta.lt(0)) {
-        const after = new D(bal.qtyOnHand).plus(delta);
+        const after = new Decimal(bal.qtyOnHand).plus(delta);
         if (after.lt(0)) throw DomainError.rule(ErrorCode.NEGATIVE_STOCK, 'Adjustment would make stock negative');
         if (after.lt(bal.qtyReserved)) throw DomainError.rule(ErrorCode.ADJUSTMENT_CONFLICTS_RESERVATION, 'Release reservations before reducing reserved stock (UC-17 E1)');
       }
       await this.sites.assertNotFrozen(tx, bal.locationId).catch((err) => {
         if (!adj.stockCountLineId) throw err; // điều chỉnh từ chính đợt kiểm kê được phép trên location đang freeze
       });
-      const r = await this.ledger.post(tx, {
+      const ledgerResult = await this.ledger.post(tx, {
         siteId,
         txType: delta.gt(0) ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
         idempotencyKey: `adjustment:${adj.id}`,
@@ -137,11 +137,11 @@ export class StockService {
       });
       const res = await tx.stockAdjustment.updateMany({
         where: { id: adj.id, version: adj.version },
-        data: { status: 'APPLIED', approvedById: principal.userId, decidedAt: new Date(), decisionNote: body.note ?? null, appliedTxId: r.tx.id, version: { increment: 1 } },
+        data: { status: 'APPLIED', approvedById: principal.userId, decidedAt: new Date(), decisionNote: body.note ?? null, appliedTxId: ledgerResult.tx.id, version: { increment: 1 } },
       });
       if (res.count === 0) throw DomainError.concurrent();
       await this.audit.record(tx, { siteId, action: 'ADJUSTMENT_APPROVED', entityType: 'StockAdjustment', entityId: adj.id, reason: body.note ?? null });
-      await this.events.inventoryUpdated(tx, siteId, r.changes, [r.tx.id]);
+      await this.events.inventoryUpdated(tx, siteId, ledgerResult.changes, [ledgerResult.tx.id]);
       if (bal.handlingUnitId) await this.events.palletMoved(tx, siteId, bal.handlingUnitId, bal.locationId, bal.locationId);
       return adj.id;
     });
@@ -171,7 +171,7 @@ export class StockService {
       const inverse = REVERSIBLE[orig.txType];
       if (!inverse || orig.reversesTxId) throw DomainError.rule(ErrorCode.NOT_REVERSIBLE, `${orig.txType} transactions cannot be reversed here`);
       if (await tx.inventoryTransaction.findFirst({ where: { reversesTxId: orig.id } })) throw DomainError.conflict(ErrorCode.ALREADY_REVERSED, 'This transaction was already reversed');
-      const r = await this.ledger.post(tx, {
+      const ledgerResult = await this.ledger.post(tx, {
         siteId,
         txType: inverse,
         idempotencyKey: `reversal:${orig.id}`,
@@ -189,8 +189,8 @@ export class StockService {
         reversesTxId: orig.id,
       });
       await this.audit.record(tx, { siteId, action: 'INVENTORY_TX_REVERSED', entityType: 'InventoryTransaction', entityId: String(orig.id), reason: `HIGH_SEVERITY: ${reason}` });
-      await this.events.inventoryUpdated(tx, siteId, r.changes, [r.tx.id]);
-      return r.tx;
+      await this.events.inventoryUpdated(tx, siteId, ledgerResult.changes, [ledgerResult.tx.id]);
+      return ledgerResult.tx;
     });
   }
 }

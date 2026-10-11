@@ -17,7 +17,7 @@ declare global {
  * Ô nhập mã quét (DEC-54): nhận chuỗi từ máy quét HID (gõ như bàn phím), nhập tay,
  * hoặc camera trình duyệt qua Barcode Detection API khi trình duyệt hỗ trợ.
  */
-export function ScanInput({ value, onChange, placeholder, onCameraScan }: { value: string; onChange: (v: string) => void; placeholder?: string; onCameraScan?: () => void }) {
+export function ScanInput({ value, onChange, placeholder, onCameraScan }: { value: string; onChange: (nextValue: string) => void; placeholder?: string; onCameraScan?: () => void }) {
   const [scanning, setScanning] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const supported = typeof window !== 'undefined' && !!window.BarcodeDetector;
@@ -42,7 +42,7 @@ export function ScanInput({ value, onChange, placeholder, onCameraScan }: { valu
             setScanning(false);
             break;
           }
-          await new Promise((r) => setTimeout(r, 250));
+          await new Promise((resolve) => setTimeout(resolve, 250));
         }
       } catch {
         setScanning(false);
@@ -50,16 +50,16 @@ export function ScanInput({ value, onChange, placeholder, onCameraScan }: { valu
     })();
     return () => {
       stop = true;
-      stream?.getTracks().forEach((t) => t.stop());
+      stream?.getTracks().forEach((track) => track.stop());
     };
   }, [scanning, onChange, onCameraScan]);
 
   return (
     <div className="space-y-2">
       <div className="flex gap-2">
-        <Input autoFocus value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+        <Input autoFocus value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
         {supported ? (
-          <Button type="button" variant="outline" size="icon" onClick={() => setScanning((s) => !s)} aria-label="Camera">
+          <Button type="button" variant="outline" size="icon" onClick={() => setScanning((wasScanning) => !wasScanning)} aria-label="Camera">
             {scanning ? <X size={16} /> : <Camera size={16} />}
           </Button>
         ) : null}

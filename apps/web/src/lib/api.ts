@@ -18,7 +18,7 @@ export class ApiError extends Error {
 
 let accessToken: string | null = null;
 let refreshing: Promise<string | null> | null = null;
-const tokenListeners = new Set<(t: string | null) => void>();
+const tokenListeners = new Set<(nextToken: string | null) => void>();
 
 export function getAccessToken() {
   return accessToken;
@@ -26,10 +26,10 @@ export function getAccessToken() {
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
-  for (const l of tokenListeners) l(token);
+  for (const listener of tokenListeners) listener(token);
 }
 
-export function onTokenChange(listener: (t: string | null) => void) {
+export function onTokenChange(listener: (nextToken: string | null) => void) {
   tokenListeners.add(listener);
   return () => tokenListeners.delete(listener);
 }
@@ -99,7 +99,7 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
 /** Thông điệp thân thiện cho lỗi nghiệp vụ, kèm danh sách blocker nếu có. */
 export function describeError(err: unknown): string {
   if (err instanceof ApiError) {
-    const blockers = (err.problem.details?.blockers as Array<{ message: string }> | undefined)?.map((b) => b.message);
+    const blockers = (err.problem.details?.blockers as Array<{ message: string }> | undefined)?.map((blocker) => blocker.message);
     const missing = err.problem.details?.missing as string[] | undefined;
     return [err.problem.title, blockers?.join(' · '), missing ? `Missing: ${missing.join(', ')}` : null].filter(Boolean).join(' — ');
   }

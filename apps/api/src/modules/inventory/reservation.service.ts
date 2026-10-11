@@ -6,7 +6,7 @@ import type { Tx } from '../../platform/prisma/prisma.service';
 import type { BalanceChange } from './ledger.service';
 import { LedgerService } from './ledger.service';
 
-const D = Prisma.Decimal;
+const Decimal = Prisma.Decimal;
 
 export interface ReserveRequest {
   siteId: string;
@@ -33,52 +33,52 @@ export interface ReserveResult {
 export class ReservationService {
   constructor(private readonly ledger: LedgerService) {}
 
-  async reserve(tx: Tx, r: ReserveRequest): Promise<ReserveResult> {
-    const sku = await tx.sku.findUniqueOrThrow({ where: { id: r.skuId } });
+  async reserve(tx: Tx, request: ReserveRequest): Promise<ReserveResult> {
+    const sku = await tx.sku.findUniqueOrThrow({ where: { id: request.skuId } });
     const today = new Date(new Date().toISOString().slice(0, 10));
     const candidates = await tx.$queryRaw<{ id: string }[]>`
       SELECT b.id FROM inventory_balance b
       JOIN location l ON l.id = b.location_id
       LEFT JOIN lot ON lot.id = b.lot_id
-      WHERE b.site_id = ${r.siteId}::uuid AND b.sku_id = ${r.skuId}::uuid AND b.stock_status = 'AVAILABLE'
+      WHERE b.site_id = ${request.siteId}::uuid AND b.sku_id = ${request.skuId}::uuid AND b.stock_status = 'AVAILABLE'
         AND b.qty_on_hand > b.qty_reserved
         AND l.location_type IN ('STORAGE', 'STAGING') AND l.blocked_at IS NULL AND l.frozen_by_count_id IS NULL
-        AND (${r.lotId ?? null}::uuid IS NULL OR b.lot_id = ${r.lotId ?? null}::uuid)
+        AND (${request.lotId ?? null}::uuid IS NULL OR b.lot_id = ${request.lotId ?? null}::uuid)
         AND (lot.expires_on IS NULL OR lot.expires_on >= ${today}::date)
       ORDER BY b.id
       FOR UPDATE OF b`;
-    if (candidates.length === 0 && r.allOrNothing) throw DomainError.rule(ErrorCode.INSUFFICIENT_AVAILABLE_STOCK, `No available stock for ${sku.code}`);
-    const balances = await tx.inventoryBalance.findMany({ where: { id: { in: candidates.map((c) => c.id) } } });
-    const lots = new Map((await tx.lot.findMany({ where: { id: { in: balances.map((b) => b.lotId).filter((x): x is string => !!x) } } })).map((l) => [l.id, l]));
+    if (candidates.length === 0 && request.allOrNothing) throw DomainError.rule(ErrorCode.INSUFFICIENT_AVAILABLE_STOCK, `No available stock for ${sku.code}`);
+    const balances = await tx.inventoryBalance.findMany({ where: { id: { in: candidates.map((candidate) => candidate.id) } } });
+    const lots = new Map((await tx.lot.findMany({ where: { id: { in: balances.map((balance) => balance.lotId).filter((lotId): lotId is string => !!lotId) } } })).map((lot) => [lot.id, lot]));
     // FEFO: hạn dùng sớm nhất trước; FIFO: nhận sớm nhất trước (DEC-09)
-    balances.sort((a, b) => {
+    balances.sort((left, right) => {
       if (sku.allocationStrategy === 'FEFO') {
-        const ea = (a.lotId && lots.get(a.lotId)?.expiresOn?.getTime()) || Number.MAX_SAFE_INTEGER;
-        const eb = (b.lotId && lots.get(b.lotId)?.expiresOn?.getTime()) || Number.MAX_SAFE_INTEGER;
+        const ea = (left.lotId && lots.get(left.lotId)?.expiresOn?.getTime()) || Number.MAX_SAFE_INTEGER;
+        const eb = (right.lotId && lots.get(right.lotId)?.expiresOn?.getTime()) || Number.MAX_SAFE_INTEGER;
         if (ea !== eb) return ea - eb;
       }
-      return a.receivedAt.getTime() - b.receivedAt.getTime();
+      return left.receivedAt.getTime() - right.receivedAt.getTime();
     });
-    let remaining = new D(r.quantity);
-    const totalAvailable = balances.reduce((s, b) => s.plus(new D(b.qtyOnHand).minus(b.qtyReserved)), new D(0));
-    if (r.allOrNothing && totalAvailable.lt(remaining)) {
+    let remaining = new Decimal(request.quantity);
+    const totalAvailable = balances.reduce((sum, balance) => sum.plus(new Decimal(balance.qtyOnHand).minus(balance.qtyReserved)), new Decimal(0));
+    if (request.allOrNothing && totalAvailable.lt(remaining)) {
       throw DomainError.rule(ErrorCode.INSUFFICIENT_AVAILABLE_STOCK, `Only ${totalAvailable.toFixed(3)} ${sku.baseUom} of ${sku.code} available`, { available: totalAvailable.toFixed(3) });
     }
     const reservations: Reservation[] = [];
     const changes: BalanceChange[] = [];
-    for (const b of balances) {
+    for (const balance of balances) {
       if (remaining.lte(0)) break;
-      const free = new D(b.qtyOnHand).minus(b.qtyReserved);
+      const free = new Decimal(balance.qtyOnHand).minus(balance.qtyReserved);
       const take = Prisma.Decimal.min(free, remaining);
       if (take.lte(0)) continue;
-      const updated = await tx.inventoryBalance.update({ where: { id: b.id }, data: { qtyReserved: { increment: take }, version: { increment: 1 } } });
+      const updated = await tx.inventoryBalance.update({ where: { id: balance.id }, data: { qtyReserved: { increment: take }, version: { increment: 1 } } });
       changes.push(this.ledger.change(updated));
       reservations.push(
-        await tx.reservation.create({ data: { siteId: r.siteId, balanceId: b.id, outboundOrderLineId: r.outboundOrderLineId, shipmentId: r.shipmentId ?? null, quantity: take } }),
+        await tx.reservation.create({ data: { siteId: request.siteId, balanceId: balance.id, outboundOrderLineId: request.outboundOrderLineId, shipmentId: request.shipmentId ?? null, quantity: take } }),
       );
       remaining = remaining.minus(take);
     }
-    const requested = new D(r.quantity);
+    const requested = new Decimal(request.quantity);
     return { reserved: requested.minus(Prisma.Decimal.max(remaining, 0)), shortage: Prisma.Decimal.max(remaining, 0), reservations, changes };
   }
 
@@ -102,7 +102,7 @@ export class ReservationService {
   /** Dispatch: ISSUE giảm on-hand và reserved đúng một lần, reservation → CONSUMED (BR-22). */
   async consume(tx: Tx, reservation: Reservation, commandId: string, referenceId: string) {
     const bal = await tx.inventoryBalance.findUniqueOrThrow({ where: { id: reservation.balanceId } });
-    const r = await this.ledger.post(tx, {
+    const ledgerResult = await this.ledger.post(tx, {
       siteId: reservation.siteId,
       txType: 'ISSUE',
       idempotencyKey: `${commandId}:issue:${reservation.id}`,
@@ -116,7 +116,7 @@ export class ReservationService {
       referenceType: 'SHIPMENT',
       referenceId,
     });
-    if (!r.replayed) await tx.reservation.update({ where: { id: reservation.id }, data: { status: 'CONSUMED', version: { increment: 1 } } });
-    return r;
+    if (!ledgerResult.replayed) await tx.reservation.update({ where: { id: reservation.id }, data: { status: 'CONSUMED', version: { increment: 1 } } });
+    return ledgerResult;
   }
 }

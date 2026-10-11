@@ -14,9 +14,9 @@ const DEMO_USERS = ['manager', 'dispatcher', 'gate', 'supervisor', 'operator', '
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const status = useAuth((s) => s.status);
-  const me = useAuth((s) => s.me);
-  const login = useAuth((s) => s.login);
+  const status = useAuth((state) => state.status);
+  const me = useAuth((state) => state.me);
+  const login = useAuth((state) => state.login);
   const [error, setError] = useState<string | null>(null);
   // Tài khoản mẫu chỉ hiện ở bản demo; vận hành thật không gợi ý username
   const { data: runInfo } = useQuery({ queryKey: ['health', 'info'], queryFn: () => api<{ mode: 'demo' | 'live' }>('/health/info'), staleTime: Infinity });

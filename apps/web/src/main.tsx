@@ -37,7 +37,7 @@ const queryClient = new QueryClient({
 });
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const status = useAuth((s) => s.status);
+  const status = useAuth((state) => state.status);
   if (status === 'unknown') return <div className="flex h-full items-center justify-center text-muted">Loading…</div>;
   if (status === 'anonymous') return <Navigate to="/login" replace />;
   return <>{children}</>;
@@ -51,7 +51,7 @@ export function defaultSiteCode(sites: Array<{ code: string }>): string | null {
   } catch {
     /* bỏ qua */
   }
-  return sites.find((s) => s.code === last)?.code ?? sites[0]?.code ?? null;
+  return sites.find((site) => site.code === last)?.code ?? sites[0]?.code ?? null;
 }
 
 function HomeRedirect() {
@@ -114,8 +114,8 @@ const router = createBrowserRouter([
 ]);
 
 function App() {
-  const bootstrap = useAuth((s) => s.bootstrap);
-  const status = useAuth((s) => s.status);
+  const bootstrap = useAuth((state) => state.bootstrap);
+  const status = useAuth((state) => state.status);
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);

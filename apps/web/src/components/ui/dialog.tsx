@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
-export function Dialog({ open, onOpenChange, title, description, children, className }: { open: boolean; onOpenChange: (o: boolean) => void; title: string; description?: string; children: ReactNode; className?: string }) {
+export function Dialog({ open, onOpenChange, title, description, children, className }: { open: boolean; onOpenChange: (isOpen: boolean) => void; title: string; description?: string; children: ReactNode; className?: string }) {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>

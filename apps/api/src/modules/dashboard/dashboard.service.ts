@@ -43,18 +43,18 @@ export class DashboardService {
         const occ = await this.occupancy.activeByLocations(siteId, undefined, tx);
 
         const docks = locations
-          .filter((l) => l.locationType === 'DOCK')
-          .map((l) => {
-            const o = occ.get(l.id) ?? [];
-            const v = o.find((x) => x.occupantType === 'TRUCK_VISIT');
-            return { locationId: l.id, code: l.code, direction: l.dock?.direction ?? 'BOTH', effectiveStatus: effectiveStatus(l, o).status, visitId: v?.occupantId ?? null, version: l.version };
+          .filter((location) => location.locationType === 'DOCK')
+          .map((location) => {
+            const occupancies = occ.get(location.id) ?? [];
+            const visitOccupancy = occupancies.find((occupancy) => occupancy.occupantType === 'TRUCK_VISIT');
+            return { locationId: location.id, code: location.code, direction: location.dock?.direction ?? 'BOTH', effectiveStatus: effectiveStatus(location, occupancies).status, visitId: visitOccupancy?.occupantId ?? null, version: location.version };
           });
         const slots = locations
-          .filter((l) => l.locationType !== 'DOCK')
-          .map((l) => {
-            const o = occ.get(l.id) ?? [];
-            const cur = o.find((x) => x.kind === 'OCCUPIED') ?? o[0];
-            return { locationId: l.id, code: l.code, locationType: l.locationType, effectiveStatus: effectiveStatus(l, o).status, occupantType: cur?.occupantType ?? null, occupantId: cur?.occupantId ?? null };
+          .filter((location) => location.locationType !== 'DOCK')
+          .map((location) => {
+            const occupancies = occ.get(location.id) ?? [];
+            const cur = occupancies.find((occupancy) => occupancy.kind === 'OCCUPIED') ?? occupancies[0];
+            return { locationId: location.id, code: location.code, locationType: location.locationType, effectiveStatus: effectiveStatus(location, occupancies).status, occupantType: cur?.occupantType ?? null, occupantId: cur?.occupantId ?? null };
           });
 
         const visits = await tx.truckVisit.findMany({
@@ -63,27 +63,27 @@ export class DashboardService {
           orderBy: { appointmentStart: 'asc' },
         });
         const truckOcc = await tx.locationOccupancy.findMany({
-          where: { occupantType: 'TRUCK_VISIT', occupantId: { in: visits.map((v) => v.id) }, releasedAt: null, kind: 'OCCUPIED' },
+          where: { occupantType: 'TRUCK_VISIT', occupantId: { in: visits.map((visit) => visit.id) }, releasedAt: null, kind: 'OCCUPIED' },
         });
-        const trucks: SnapshotTruck[] = visits.map((v) => {
-          const o = truckOcc.find((x) => x.occupantId === v.id);
+        const trucks: SnapshotTruck[] = visits.map((visit) => {
+          const occupancy = truckOcc.find((truckOccupancy) => truckOccupancy.occupantId === visit.id);
           return {
-            visitId: v.id,
-            code: v.code,
-            truckCode: v.truck.code,
-            plate: v.truck.plateNumber,
-            carrier: v.truck.carrier?.name ?? null,
-            truckType: v.truck.truckType,
-            direction: v.direction,
-            status: v.status,
-            dockLocationId: v.dockLocationId,
-            position: o ? { locationId: o.locationId, source: o.positionSource ?? 'CONFIRMED_MANUAL', confirmedAt: (o.occupiedAt ?? o.startedAt).toISOString() } : null,
-            etaAt: (v.etaAt ?? v.appointmentStart)?.toISOString() ?? null,
-            version: v.version,
+            visitId: visit.id,
+            code: visit.code,
+            truckCode: visit.truck.code,
+            plate: visit.truck.plateNumber,
+            carrier: visit.truck.carrier?.name ?? null,
+            truckType: visit.truck.truckType,
+            direction: visit.direction,
+            status: visit.status,
+            dockLocationId: visit.dockLocationId,
+            position: occupancy ? { locationId: occupancy.locationId, source: occupancy.positionSource ?? 'CONFIRMED_MANUAL', confirmedAt: (occupancy.occupiedAt ?? occupancy.startedAt).toISOString() } : null,
+            etaAt: (visit.etaAt ?? visit.appointmentStart)?.toISOString() ?? null,
+            version: visit.version,
           };
         });
 
-        const forklifts = (await tx.equipment.findMany({ where: { siteId, deletedAt: null }, orderBy: { code: 'asc' } })).map((e) => this.equipment.toSnapshot(e));
+        const forklifts = (await tx.equipment.findMany({ where: { siteId, deletedAt: null }, orderBy: { code: 'asc' } })).map((equipment) => this.equipment.toSnapshot(equipment));
 
         const snapshot: SiteSnapshot = {
           site: { id: site.id, code: site.code, name: site.name, timezone: site.timezone, siteType: site.siteType },
@@ -99,7 +99,7 @@ export class DashboardService {
           vehicles: [],
           activeShipments: [],
         };
-        for (const c of this.contributors.snapshot) Object.assign(snapshot, await c(tx, siteId));
+        for (const contributor of this.contributors.snapshot) Object.assign(snapshot, await contributor(tx, siteId));
         return snapshot;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
@@ -124,12 +124,12 @@ export class DashboardService {
   }
 
   /** Tìm kiếm toàn cục trong các site được phép (#191). */
-  async search(q: string, allowedSiteIds: string[], limit = 20): Promise<SearchResult[]> {
-    const term = q.trim();
+  async search(query: string, allowedSiteIds: string[], limit = 20): Promise<SearchResult[]> {
+    const term = query.trim();
     if (term.length < 2) return [];
     const like = { contains: term, mode: 'insensitive' as const };
     const sites = await this.prisma.site.findMany({ where: { id: { in: allowedSiteIds }, OR: [{ code: like }, { name: like }] }, take: 5 });
-    const siteCode = new Map((await this.prisma.site.findMany({ where: { id: { in: allowedSiteIds } } })).map((s) => [s.id, s.code]));
+    const siteCode = new Map((await this.prisma.site.findMany({ where: { id: { in: allowedSiteIds } } })).map((site) => [site.id, site.code]));
     const visits = await this.prisma.truckVisit.findMany({
       where: { siteId: { in: allowedSiteIds }, status: { notIn: ['EXITED', 'CANCELLED', 'NO_SHOW', 'REJECTED'] }, OR: [{ code: like }, { truck: { code: like } }, { truck: { plateNumber: like } }] },
       include: { truck: true },
@@ -143,11 +143,11 @@ export class DashboardService {
       take: limit,
     });
     return [
-      ...sites.map((s) => ({ type: 'site' as const, id: s.id, code: s.code, label: s.name, siteId: s.id, siteCode: s.code })),
-      ...visits.map((v) => ({ type: 'truck' as const, id: v.id, code: v.truck.code, label: `${v.truck.plateNumber} · ${v.status}`, siteId: v.siteId, siteCode: siteCode.get(v.siteId) ?? null })),
-      ...equipment.map((e) => ({ type: 'forklift' as const, id: e.id, code: e.code, label: e.model ?? e.equipmentType, siteId: e.siteId, siteCode: siteCode.get(e.siteId) ?? null })),
-      ...stays.map((v) => ({ type: 'vehicle' as const, id: v.id, code: v.vehicle.vin, label: [v.vehicle.make, v.vehicle.model, v.status].filter(Boolean).join(' · '), siteId: v.siteId, siteCode: siteCode.get(v.siteId) ?? null })),
-      ...locations.map((l) => ({ type: 'location' as const, id: l.id, code: l.code, label: l.locationType, siteId: l.siteId, siteCode: siteCode.get(l.siteId) ?? null })),
+      ...sites.map((site) => ({ type: 'site' as const, id: site.id, code: site.code, label: site.name, siteId: site.id, siteCode: site.code })),
+      ...visits.map((visit) => ({ type: 'truck' as const, id: visit.id, code: visit.truck.code, label: `${visit.truck.plateNumber} · ${visit.status}`, siteId: visit.siteId, siteCode: siteCode.get(visit.siteId) ?? null })),
+      ...equipment.map((forklift) => ({ type: 'forklift' as const, id: forklift.id, code: forklift.code, label: forklift.model ?? forklift.equipmentType, siteId: forklift.siteId, siteCode: siteCode.get(forklift.siteId) ?? null })),
+      ...stays.map((stay) => ({ type: 'vehicle' as const, id: stay.id, code: stay.vehicle.vin, label: [stay.vehicle.make, stay.vehicle.model, stay.status].filter(Boolean).join(' · '), siteId: stay.siteId, siteCode: siteCode.get(stay.siteId) ?? null })),
+      ...locations.map((location) => ({ type: 'location' as const, id: location.id, code: location.code, label: location.locationType, siteId: location.siteId, siteCode: siteCode.get(location.siteId) ?? null })),
     ].slice(0, limit);
   }
 }

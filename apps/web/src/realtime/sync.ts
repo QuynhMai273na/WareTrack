@@ -41,8 +41,8 @@ export class SiteSequencer {
 
 type Versioned = { version: number };
 
-function upsertBy<T extends Versioned>(list: T[], item: T, key: (t: T) => string): T[] {
-  const idx = list.findIndex((x) => key(x) === key(item));
+function upsertBy<T extends Versioned>(list: T[], item: T, key: (entry: T) => string): T[] {
+  const idx = list.findIndex((existingEntry) => key(existingEntry) === key(item));
   if (idx === -1) return [...list, item];
   if (list[idx].version > item.version) return list; // chỉ patch khi version mới hơn (mục 17.6)
   const next = list.slice();
@@ -51,40 +51,40 @@ function upsertBy<T extends Versioned>(list: T[], item: T, key: (t: T) => string
 }
 
 /** Patch snapshot trong cache theo event (state-carrying). Trả về snapshot mới (bất biến). */
-export function applyEventToSnapshot(snap: SiteSnapshot, e: RealtimeEnvelope): SiteSnapshot {
-  const d = e.data as Record<string, any>;
-  switch (e.type) {
+export function applyEventToSnapshot(snap: SiteSnapshot, event: RealtimeEnvelope): SiteSnapshot {
+  const payload = event.data as Record<string, any>;
+  switch (event.type) {
     case 'truck.arrived':
     case 'truck.dock_assigned':
     case 'truck.docked':
     case 'truck.status_changed':
     case 'truck.departed': {
-      const v = d.visit;
-      if (!v) return snap;
-      if (['EXITED', 'REJECTED', 'NO_SHOW', 'CANCELLED'].includes(v.status)) {
-        return { ...snap, trucks: snap.trucks.filter((t) => t.visitId !== v.id) };
+      const visit = payload.visit;
+      if (!visit) return snap;
+      if (['EXITED', 'REJECTED', 'NO_SHOW', 'CANCELLED'].includes(visit.status)) {
+        return { ...snap, trucks: snap.trucks.filter((truck) => truck.visitId !== visit.id) };
       }
-      const existing = snap.trucks.find((t) => t.visitId === v.id);
-      const docked = ['AT_DOCK', 'HANDLING'].includes(v.status) && v.dock;
+      const existing = snap.trucks.find((truck) => truck.visitId === visit.id);
+      const docked = ['AT_DOCK', 'HANDLING'].includes(visit.status) && visit.dock;
       return {
         ...snap,
         trucks: upsertBy(
           snap.trucks,
           {
-            visitId: v.id,
-            code: v.code,
-            truckCode: v.truck.code,
-            plate: v.truck.plateNumber,
-            carrier: v.truck.carrier?.name ?? null,
-            truckType: v.truck.truckType,
-            direction: v.direction,
-            status: v.status,
-            dockLocationId: v.dock?.id ?? null,
-            position: docked ? { locationId: v.dock.id, source: 'CONFIRMED_SCAN', confirmedAt: v.dockedAt ?? e.occurredAt } : (existing?.position && v.status === 'READY_TO_LEAVE' ? existing.position : null),
-            etaAt: v.etaAt ?? v.appointmentStart ?? null,
-            version: v.version,
+            visitId: visit.id,
+            code: visit.code,
+            truckCode: visit.truck.code,
+            plate: visit.truck.plateNumber,
+            carrier: visit.truck.carrier?.name ?? null,
+            truckType: visit.truck.truckType,
+            direction: visit.direction,
+            status: visit.status,
+            dockLocationId: visit.dock?.id ?? null,
+            position: docked ? { locationId: visit.dock.id, source: 'CONFIRMED_SCAN', confirmedAt: visit.dockedAt ?? event.occurredAt } : (existing?.position && visit.status === 'READY_TO_LEAVE' ? existing.position : null),
+            etaAt: visit.etaAt ?? visit.appointmentStart ?? null,
+            version: visit.version,
           },
-          (t) => t.visitId,
+          (truck) => truck.visitId,
         ),
       };
     }
@@ -92,40 +92,40 @@ export function applyEventToSnapshot(snap: SiteSnapshot, e: RealtimeEnvelope): S
       return {
         ...snap,
         docks: snap.docks.map((dk) =>
-          dk.locationId === d.locationId ? { ...dk, effectiveStatus: d.effectiveStatus, visitId: d.visitId ?? null, version: d.locationVersion ?? dk.version } : dk,
+          dk.locationId === payload.locationId ? { ...dk, effectiveStatus: payload.effectiveStatus, visitId: payload.visitId ?? null, version: payload.locationVersion ?? dk.version } : dk,
         ),
       };
     case 'slot.status_changed':
       return {
         ...snap,
-        slots: snap.slots.map((s) => (s.locationId === d.locationId ? { ...s, effectiveStatus: d.effectiveStatus, occupantType: d.occupantType, occupantId: d.occupantId } : s)),
+        slots: snap.slots.map((slot) => (slot.locationId === payload.locationId ? { ...slot, effectiveStatus: payload.effectiveStatus, occupantType: payload.occupantType, occupantId: payload.occupantId } : slot)),
       };
     case 'site.kpi_updated':
-      return { ...snap, kpis: d.kpis ?? snap.kpis };
+      return { ...snap, kpis: payload.kpis ?? snap.kpis };
     case 'forklift.status_changed':
     case 'forklift.task_updated':
-      if (!d.forklift) return snap;
-      return { ...snap, forklifts: upsertBy(snap.forklifts, d.forklift, (f) => f.id) };
+      if (!payload.forklift) return snap;
+      return { ...snap, forklifts: upsertBy(snap.forklifts, payload.forklift, (forklift) => forklift.id) };
     case 'pallet.moved':
-      if (!d.pallet) return snap;
+      if (!payload.pallet) return snap;
       return {
         ...snap,
-        pallets: ['DISPATCHED', 'EMPTY'].includes(d.pallet.lifecycle) ? snap.pallets.filter((p) => p.id !== d.pallet.id) : upsertBy(snap.pallets, d.pallet, (p) => p.id),
+        pallets: ['DISPATCHED', 'EMPTY'].includes(payload.pallet.lifecycle) ? snap.pallets.filter((pallet) => pallet.id !== payload.pallet.id) : upsertBy(snap.pallets, payload.pallet, (pallet) => pallet.id),
       };
     case 'vehicle.status_changed':
     case 'vehicle.location_changed':
-      if (!d.vehicle) return snap;
+      if (!payload.vehicle) return snap;
       return {
         ...snap,
-        vehicles: ['EXITED', 'CANCELLED'].includes(d.vehicle.status) ? snap.vehicles.filter((x) => x.stayId !== d.vehicle.stayId) : upsertBy(snap.vehicles, d.vehicle, (x) => x.stayId),
+        vehicles: ['EXITED', 'CANCELLED'].includes(payload.vehicle.status) ? snap.vehicles.filter((vehicle) => vehicle.stayId !== payload.vehicle.stayId) : upsertBy(snap.vehicles, payload.vehicle, (vehicle) => vehicle.stayId),
       };
     case 'shipment.progress_updated':
-      if (!d.shipment) return snap;
+      if (!payload.shipment) return snap;
       return {
         ...snap,
-        activeShipments: ['DELIVERED', 'CANCELLED', 'CLOSED'].includes(d.shipment.status)
-          ? snap.activeShipments.filter((s) => s.id !== d.shipment.id)
-          : upsertBy(snap.activeShipments, d.shipment, (s) => s.id),
+        activeShipments: ['DELIVERED', 'CANCELLED', 'CLOSED'].includes(payload.shipment.status)
+          ? snap.activeShipments.filter((shipment) => shipment.id !== payload.shipment.id)
+          : upsertBy(snap.activeShipments, payload.shipment, (shipment) => shipment.id),
       };
     default:
       return snap;

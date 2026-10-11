@@ -26,19 +26,19 @@ const HUB = '#cbd5e1';
 let ribTexture: CanvasTexture | null = null;
 export function corrugatedTexture(): CanvasTexture {
   if (ribTexture) return ribTexture;
-  const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 8;
-  const g = c.getContext('2d')!;
-  const grad = g.createLinearGradient(0, 0, 64, 0);
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 8;
+  const context = canvas.getContext('2d')!;
+  const grad = context.createLinearGradient(0, 0, 64, 0);
   grad.addColorStop(0, '#ffffff');
   grad.addColorStop(0.45, '#ffffff');
   grad.addColorStop(0.6, '#c9d0e2');
   grad.addColorStop(0.8, '#e6eaf4');
   grad.addColorStop(1, '#ffffff');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 8);
-  ribTexture = new CanvasTexture(c);
+  context.fillStyle = grad;
+  context.fillRect(0, 0, 64, 8);
+  ribTexture = new CanvasTexture(canvas);
   ribTexture.wrapS = RepeatWrapping;
   ribTexture.wrapT = RepeatWrapping;
   ribTexture.colorSpace = SRGBColorSpace;
@@ -48,22 +48,22 @@ export function corrugatedTexture(): CanvasTexture {
 
 export function useRibbed(repeatX: number, repeatY = 1) {
   return useMemo(() => {
-    const t = corrugatedTexture().clone();
-    t.repeat.set(repeatX, repeatY);
-    t.needsUpdate = true;
-    return t;
+    const texture = corrugatedTexture().clone();
+    texture.repeat.set(repeatX, repeatY);
+    texture.needsUpdate = true;
+    return texture;
   }, [repeatX, repeatY]);
 }
 
-function Wheel({ x, z, r = 0.5, w = 0.42 }: { x: number; z: number; r?: number; w?: number }) {
+function Wheel({ x, z, radius = 0.5, width = 0.42 }: { x: number; z: number; radius?: number; width?: number }) {
   return (
-    <group position={[x, r, z]} rotation={[0, 0, Math.PI / 2]}>
+    <group position={[x, radius, z]} rotation={[0, 0, Math.PI / 2]}>
       <mesh castShadow>
-        <cylinderGeometry args={[r, r, w, 18]} />
+        <cylinderGeometry args={[radius, radius, width, 18]} />
         <meshStandardMaterial color={TIRE} roughness={0.9} />
       </mesh>
-      <mesh position={[0, (Math.sign(x) * w) / 2 + Math.sign(x) * 0.01, 0]}>
-        <cylinderGeometry args={[r * 0.5, r * 0.5, 0.02, 14]} />
+      <mesh position={[0, (Math.sign(x) * width) / 2 + Math.sign(x) * 0.01, 0]}>
+        <cylinderGeometry args={[radius * 0.5, radius * 0.5, 0.02, 14]} />
         <meshStandardMaterial color={HUB} metalness={0.4} roughness={0.4} />
       </mesh>
     </group>
@@ -72,11 +72,11 @@ function Wheel({ x, z, r = 0.5, w = 0.42 }: { x: number; z: number; r?: number; 
 
 /** Xe tải hộp: dài theo trục Z, cabin ở phía +Z (footprint ~15 m). */
 export const TruckModel = memo(function TruckModel({ carrier, opacity = 1, type }: { carrier: string | null; opacity?: number; type: string }) {
-  const c = CARRIER_COLORS[carrier ?? ''] ?? { cab: '#2f6fe4', stripe: '#2f6fe4', text: '#2f6fe4', brand: carrier?.split(' ')[0] ?? 'WareTrack' };
+  const palette = CARRIER_COLORS[carrier ?? ''] ?? { cab: '#2f6fe4', stripe: '#2f6fe4', text: '#2f6fe4', brand: carrier?.split(' ')[0] ?? 'WareTrack' };
   const transparent = opacity < 1;
   const mat = { transparent, opacity };
   const trailer = type === 'REEFER' ? '#f4f7fb' : '#ffffff';
-  const cabDark = useMemo(() => new Color(c.cab).multiplyScalar(0.82).getStyle(), [c.cab]);
+  const cabDark = useMemo(() => new Color(palette.cab).multiplyScalar(0.82).getStyle(), [palette.cab]);
   return (
     <group>
       {/* Thùng hàng bo góc + dải màu hãng + logo */}
@@ -84,14 +84,14 @@ export const TruckModel = memo(function TruckModel({ carrier, opacity = 1, type 
         <meshStandardMaterial color={trailer} roughness={0.55} {...mat} />
       </RoundedBox>
       {/* Xe mờ (vị trí ước lượng) chỉ vẽ chữ một bên để không thấy chữ ngược xuyên qua thùng */}
-      {(transparent ? [1] : [1, -1]).map((s) => (
-        <group key={s}>
-          <mesh position={[s * 1.285, 1.35, -1.6]}>
+      {(transparent ? [1] : [1, -1]).map((side) => (
+        <group key={side}>
+          <mesh position={[side * 1.285, 1.35, -1.6]}>
             <boxGeometry args={[0.02, 0.42, 10.8]} />
-            <meshStandardMaterial color={c.stripe} {...mat} />
+            <meshStandardMaterial color={palette.stripe} {...mat} />
           </mesh>
-          <Text position={[s * 1.3, 2.7, -1.2]} rotation={[0, (s * Math.PI) / 2, 0]} fontSize={0.95} fontWeight={700} color={c.text} anchorX="center" anchorY="middle">
-            {c.brand}
+          <Text position={[side * 1.3, 2.7, -1.2]} rotation={[0, (side * Math.PI) / 2, 0]} fontSize={0.95} fontWeight={700} color={palette.text} anchorX="center" anchorY="middle">
+            {palette.brand}
           </Text>
         </group>
       ))}
@@ -113,7 +113,7 @@ export const TruckModel = memo(function TruckModel({ carrier, opacity = 1, type 
       {/* Cabin */}
       <group position={[0, 0, 5.35]}>
         <RoundedBox args={[2.5, 2.2, 2.3]} radius={0.22} smoothness={4} position={[0, 2.05, 0]} castShadow>
-          <meshStandardMaterial color={c.cab} roughness={0.4} {...mat} />
+          <meshStandardMaterial color={palette.cab} roughness={0.4} {...mat} />
         </RoundedBox>
         <RoundedBox args={[2.5, 0.9, 2.5]} radius={0.15} position={[0, 0.95, 0.08]} castShadow>
           <meshStandardMaterial color={cabDark} roughness={0.5} {...mat} />
@@ -123,8 +123,8 @@ export const TruckModel = memo(function TruckModel({ carrier, opacity = 1, type 
           <boxGeometry args={[2.2, 1.0, 0.04]} />
           <meshStandardMaterial color={GLASS} metalness={0.3} roughness={0.15} {...mat} />
         </mesh>
-        {[1, -1].map((s) => (
-          <mesh key={s} position={[s * 1.26, 2.4, 0.35]}>
+        {[1, -1].map((side) => (
+          <mesh key={side} position={[side * 1.26, 2.4, 0.35]}>
             <boxGeometry args={[0.03, 0.8, 1.1]} />
             <meshStandardMaterial color={GLASS} metalness={0.3} roughness={0.15} {...mat} />
           </mesh>
@@ -228,31 +228,31 @@ export const ForkliftModel = memo(function ForkliftModel({ dim, carrying }: { di
         </mesh>
       ))}
       {carrying ? <PalletModel position={[0, 0.27, 1.8]} scale={0.85} /> : null}
-      <Wheel x={0.6} z={0.6} r={0.32} w={0.24} />
-      <Wheel x={-0.6} z={0.6} r={0.32} w={0.24} />
-      <Wheel x={0.58} z={-0.7} r={0.27} w={0.22} />
-      <Wheel x={-0.58} z={-0.7} r={0.27} w={0.22} />
+      <Wheel x={0.6} z={0.6} radius={0.32} width={0.24} />
+      <Wheel x={-0.6} z={0.6} radius={0.32} width={0.24} />
+      <Wheel x={0.58} z={-0.7} radius={0.27} width={0.22} />
+      <Wheel x={-0.58} z={-0.7} radius={0.27} width={0.22} />
     </group>
   );
 });
 
 /** Gộp nhiều khối thành 1 geometry có màu theo đỉnh — 1 draw call / pallet (mục 18.11). */
 const palletGeoCache = new Map<string, BufferGeometry>();
-function coloredBox(w: number, h: number, d: number, x: number, y: number, z: number, color: string, rounded = 0): BufferGeometry {
-  const base = rounded > 0 ? new RoundedBoxGeometry(w, h, d, 2, rounded) : new BoxGeometry(w, h, d);
-  const g = base.index ? base.toNonIndexed() : base;
-  g.translate(x, y, z);
-  const c = new Color(color);
-  const n = g.getAttribute('position').count;
-  const cols = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    cols[i * 3] = c.r;
-    cols[i * 3 + 1] = c.g;
-    cols[i * 3 + 2] = c.b;
+function coloredBox(width: number, height: number, depth: number, x: number, y: number, z: number, color: string, rounded = 0): BufferGeometry {
+  const base = rounded > 0 ? new RoundedBoxGeometry(width, height, depth, 2, rounded) : new BoxGeometry(width, height, depth);
+  const geometry = base.index ? base.toNonIndexed() : base;
+  geometry.translate(x, y, z);
+  const vertexColor = new Color(color);
+  const vertexCount = geometry.getAttribute('position').count;
+  const cols = new Float32Array(vertexCount * 3);
+  for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+    cols[vertexIndex * 3] = vertexColor.r;
+    cols[vertexIndex * 3 + 1] = vertexColor.g;
+    cols[vertexIndex * 3 + 2] = vertexColor.b;
   }
-  g.setAttribute('color', new BufferAttribute(cols, 3));
-  g.deleteAttribute('uv');
-  return g;
+  geometry.setAttribute('color', new BufferAttribute(cols, 3));
+  geometry.deleteAttribute('uv');
+  return geometry;
 }
 
 function palletGeometry(boxColor: string, tiers: number): BufferGeometry {
@@ -264,15 +264,15 @@ function palletGeometry(boxColor: string, tiers: number): BufferGeometry {
   for (const z of [-0.42, -0.21, 0, 0.21, 0.42]) parts.push(coloredBox(1.2, 0.04, 0.15, 0, 0.14, z, '#c4935f'));
   if (boxColor === '#3b6fe0') {
     parts.push(coloredBox(1.14, 0.5 * tiers + 0.02, 0.96, 0, 0.17 + (0.5 * tiers) / 2, 0, boxColor, 0.06));
-    for (let t = 0; t < tiers; t++) parts.push(coloredBox(1.16, 0.04, 0.98, 0, 0.42 + t * 0.5, 0, '#5d88ea'));
+    for (let tier = 0; tier < tiers; tier++) parts.push(coloredBox(1.16, 0.04, 0.98, 0, 0.42 + tier * 0.5, 0, '#5d88ea'));
   } else {
     const tape = new Color(boxColor).lerp(new Color('#ffffff'), 0.35).getStyle();
     const shade = new Color(boxColor).multiplyScalar(0.9).getStyle();
-    for (let t = 0; t < tiers; t++)
+    for (let tier = 0; tier < tiers; tier++)
       for (const x of [-0.29, 0.29])
         for (const z of [-0.24, 0.24]) {
-          parts.push(coloredBox(0.55, 0.48, 0.46, x, 0.42 + t * 0.5, z, (t + (x > 0 ? 1 : 0)) % 2 ? shade : boxColor, 0.03));
-          parts.push(coloredBox(0.1, 0.006, 0.47, x, 0.42 + t * 0.5 + 0.243, z, tape));
+          parts.push(coloredBox(0.55, 0.48, 0.46, x, 0.42 + tier * 0.5, z, (tier + (x > 0 ? 1 : 0)) % 2 ? shade : boxColor, 0.03));
+          parts.push(coloredBox(0.1, 0.006, 0.47, x, 0.42 + tier * 0.5 + 0.243, z, tape));
         }
   }
   const merged = mergeGeometries(parts, false)!;
@@ -340,8 +340,8 @@ export const ContainerModel = memo(function ContainerModel({ color, label }: { c
         <meshStandardMaterial color={color} map={ribs} roughness={0.6} />
       </RoundedBox>
       {label
-        ? [1, -1].map((s) => (
-            <Text key={s} position={[s * 1.27, 1.55, 0]} rotation={[0, (s * Math.PI) / 2, 0]} fontSize={0.85} fontWeight={700} color="#ffffff" anchorX="center">
+        ? [1, -1].map((side) => (
+            <Text key={side} position={[side * 1.27, 1.55, 0]} rotation={[0, (side * Math.PI) / 2, 0]} fontSize={0.85} fontWeight={700} color="#ffffff" anchorX="center">
               {label}
             </Text>
           ))
@@ -401,8 +401,8 @@ export const CarModel = memo(function CarModel({ color }: { color: string }) {
       </mesh>
       {[1.35, -1.35].map((z) => (
         <group key={z}>
-          <Wheel x={0.82} z={z} r={0.34} w={0.2} />
-          <Wheel x={-0.82} z={z} r={0.34} w={0.2} />
+          <Wheel x={0.82} z={z} radius={0.34} width={0.2} />
+          <Wheel x={-0.82} z={z} radius={0.34} width={0.2} />
         </group>
       ))}
     </group>

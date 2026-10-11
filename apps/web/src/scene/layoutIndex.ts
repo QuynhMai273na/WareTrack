@@ -39,16 +39,16 @@ export function indexLayout(layout: PublishedLayout): LayoutIndex {
   const byLocation = new Map<string, Placed>();
   const byCode = new Map<string, Placed>();
   const locations: Placed[] = [];
-  for (const o of layout.objects) {
-    if (o.targetType !== 'LOCATION' || !o.targetId) continue;
-    const props = (o.props ?? {}) as { code?: string; locationType?: string; label?: string; display?: 'rack' | 'floor' | null; levels?: number | null; bays?: number | null };
-    const p: Placed = {
-      id: o.targetId,
-      x: o.posX,
-      z: o.posZ,
-      rotY: (o.rotY * Math.PI) / 180,
-      sx: o.sizeX,
-      sz: o.sizeZ,
+  for (const layoutObject of layout.objects) {
+    if (layoutObject.targetType !== 'LOCATION' || !layoutObject.targetId) continue;
+    const props = (layoutObject.props ?? {}) as { code?: string; locationType?: string; label?: string; display?: 'rack' | 'floor' | null; levels?: number | null; bays?: number | null };
+    const placed: Placed = {
+      id: layoutObject.targetId,
+      x: layoutObject.posX,
+      z: layoutObject.posZ,
+      rotY: (layoutObject.rotY * Math.PI) / 180,
+      sx: layoutObject.sizeX,
+      sz: layoutObject.sizeZ,
       code: props.code ?? '',
       type: props.locationType ?? '',
       label: props.label ?? props.code ?? '',
@@ -56,30 +56,30 @@ export function indexLayout(layout: PublishedLayout): LayoutIndex {
       levels: props.levels ?? 3,
       bays: props.bays ?? 2,
     };
-    byLocation.set(o.targetId, p);
-    locationLabels.set(o.targetId, { code: p.code, label: p.label, type: p.type });
-    byCode.set(p.code, p);
-    locations.push(p);
+    byLocation.set(layoutObject.targetId, placed);
+    locationLabels.set(layoutObject.targetId, { code: placed.code, label: placed.label, type: placed.type });
+    byCode.set(placed.code, placed);
+    locations.push(placed);
   }
-  const decor = layout.objects.filter((o) => o.targetType === 'DECOR');
-  const lanesObj = decor.find((d) => (d.props as { kind?: string } | null)?.kind === 'lanes');
-  const b = layout.bounds;
+  const decor = layout.objects.filter((layoutObject) => layoutObject.targetType === 'DECOR');
+  const lanesObj = decor.find((decorObject) => (decorObject.props as { kind?: string } | null)?.kind === 'lanes');
+  const layoutBounds = layout.bounds;
   return {
     byLocation,
     byCode,
     locations,
-    zones: layout.objects.filter((o) => o.targetType === 'ZONE'),
-    buildings: layout.objects.filter((o) => o.targetType === 'BUILDING'),
-    decor: decor.filter((d) => d !== lanesObj),
+    zones: layout.objects.filter((layoutObject) => layoutObject.targetType === 'ZONE'),
+    buildings: layout.objects.filter((layoutObject) => layoutObject.targetType === 'BUILDING'),
+    decor: decor.filter((decorObject) => decorObject !== lanesObj),
     lanes: lanesObj ? (lanesObj.props as unknown as Lanes) : null,
-    center: { x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2 },
-    bounds: b,
+    center: { x: (layoutBounds.minX + layoutBounds.maxX) / 2, z: (layoutBounds.minZ + layoutBounds.maxZ) / 2 },
+    bounds: layoutBounds,
   };
 }
 
 export const TRUCK_LENGTH = 15;
 
 /** Pháp tuyến (hướng ra ngoài) của một vị trí có rotY. */
-export const outward = (p: { rotY: number }) => ({ x: Math.sin(p.rotY), z: Math.cos(p.rotY) });
+export const outward = (placement: { rotY: number }) => ({ x: Math.sin(placement.rotY), z: Math.cos(placement.rotY) });
 /** Tiếp tuyến (sang phải khi nhìn từ ngoài vào). */
-export const tangent = (p: { rotY: number }) => ({ x: Math.cos(p.rotY), z: -Math.sin(p.rotY) });
+export const tangent = (placement: { rotY: number }) => ({ x: Math.cos(placement.rotY), z: -Math.sin(placement.rotY) });

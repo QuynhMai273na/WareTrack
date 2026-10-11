@@ -25,12 +25,12 @@ export function CameraRig({
 }) {
   const initialized = useRef(false);
   const ref = useRef<CameraControlsImpl>(null);
-  const command = useScene((s) => s.cameraCommand);
-  const focusRequest = useScene((s) => s.focusRequest);
-  const selection = useScene((s) => s.selection);
-  const camera = useThree((s) => s.camera);
-  const size = useThree((s) => s.size);
-  const invalidate = useThree((s) => s.invalidate);
+  const command = useScene((state) => state.cameraCommand);
+  const focusRequest = useScene((state) => state.focusRequest);
+  const selection = useScene((state) => state.selection);
+  const camera = useThree((state) => state.camera);
+  const size = useThree((state) => state.size);
+  const invalidate = useThree((state) => state.invalidate);
 
   /**
    * Khung nhìn ban đầu: tập trung vào khu vận hành (nhà kho + dock + bãi chờ), không phải toàn bộ khu đất.
@@ -66,24 +66,24 @@ export function CameraRig({
 
   const fitHome = (animate: boolean) => {
     if (framing === 'whole') return fitWholeSite(animate);
-    const c = ref.current;
-    if (!c) return;
+    const controls = ref.current;
+    if (!controls) return;
     // Tâm khu vận hành: tâm các tòa nhà (theo diện tích) lệch về phía dock — như khung hình video
     let ax = 0;
     let az = 0;
     let area = 0;
     for (const bd of layout.buildings) {
-      const a = bd.sizeX * bd.sizeZ;
-      ax += bd.posX * a;
-      az += bd.posZ * a;
-      area += a;
+      const buildingArea = bd.sizeX * bd.sizeZ;
+      ax += bd.posX * buildingArea;
+      az += bd.posZ * buildingArea;
+      area += buildingArea;
     }
-    const docks = layout.locations.filter((l) => l.type === 'DOCK');
+    const docks = layout.locations.filter((location) => location.type === 'DOCK');
     let cx = area ? ax / area : layout.center.x;
     let cz = area ? az / area : layout.center.z;
     if (docks.length) {
-      const dx = docks.reduce((s, d) => s + d.x, 0) / docks.length;
-      const dz = docks.reduce((s, d) => s + d.z, 0) / docks.length;
+      const dx = docks.reduce((sum, dock) => sum + dock.x, 0) / docks.length;
+      const dz = docks.reduce((sum, dock) => sum + dock.z, 0) / docks.length;
       cx = cx * 0.7 + dx * 0.3;
       cz = cz * 0.7 + dz * 0.3 + 6;
     }
@@ -95,44 +95,44 @@ export function CameraRig({
     cz -= shift * Math.SQRT1_2;
     cx += offset.x;
     cz += offset.z;
-    void c.setLookAt(cx + 80, 95, cz + 80, cx, 0, cz, animate);
-    void c.zoomTo(zoom, animate);
+    void controls.setLookAt(cx + 80, 95, cz + 80, cx, 0, cz, animate);
+    void controls.zoomTo(zoom, animate);
   };
 
   /** Network overview: thu nhỏ để thấy cả mạng lưới site trên bản đồ chung. */
   const fitNetwork = () => {
-    const c = ref.current;
-    if (!c || network.length === 0) return;
+    const controls = ref.current;
+    if (!controls || network.length === 0) return;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const n of network) {
-      for (const bd of n.layout.buildings) {
-        minX = Math.min(minX, n.offset.x + bd.posX - bd.sizeX / 2);
-        maxX = Math.max(maxX, n.offset.x + bd.posX + bd.sizeX / 2);
-        minZ = Math.min(minZ, n.offset.z + bd.posZ - bd.sizeZ / 2);
-        maxZ = Math.max(maxZ, n.offset.z + bd.posZ + bd.sizeZ / 2);
+    for (const networkEntry of network) {
+      for (const bd of networkEntry.layout.buildings) {
+        minX = Math.min(minX, networkEntry.offset.x + bd.posX - bd.sizeX / 2);
+        maxX = Math.max(maxX, networkEntry.offset.x + bd.posX + bd.sizeX / 2);
+        minZ = Math.min(minZ, networkEntry.offset.z + bd.posZ - bd.sizeZ / 2);
+        maxZ = Math.max(maxZ, networkEntry.offset.z + bd.posZ + bd.sizeZ / 2);
       }
     }
     const cx = (minX + maxX) / 2;
     const cz = (minZ + maxZ) / 2;
     const projected = (maxX - minX + (maxZ - minZ)) * Math.SQRT1_2 + 60;
     const zoom = Math.max(1.2, Math.min(20, (size.width * 0.8) / projected));
-    void c.setLookAt(cx + 80, 95, cz + 80, cx, 0, cz, true);
-    void c.zoomTo(zoom, true);
+    void controls.setLookAt(cx + 80, 95, cz + 80, cx, 0, cz, true);
+    void controls.zoomTo(zoom, true);
   };
 
   useEffect(() => {
-    const c = ref.current;
-    if (!c) return;
-    c.minPolarAngle = POLAR;
-    c.maxPolarAngle = POLAR;
-    c.minZoom = 1;
-    c.maxZoom = 60;
-    c.mouseButtons.left = CameraControlsImpl.ACTION.TRUCK;
-    c.mouseButtons.right = CameraControlsImpl.ACTION.ROTATE;
-    c.mouseButtons.wheel = CameraControlsImpl.ACTION.ZOOM;
-    c.touches.one = CameraControlsImpl.ACTION.TOUCH_TRUCK;
-    c.touches.two = CameraControlsImpl.ACTION.TOUCH_ZOOM_TRUCK;
-    c.dollyToCursor = true;
+    const controls = ref.current;
+    if (!controls) return;
+    controls.minPolarAngle = POLAR;
+    controls.maxPolarAngle = POLAR;
+    controls.minZoom = 1;
+    controls.maxZoom = 60;
+    controls.mouseButtons.left = CameraControlsImpl.ACTION.TRUCK;
+    controls.mouseButtons.right = CameraControlsImpl.ACTION.ROTATE;
+    controls.mouseButtons.wheel = CameraControlsImpl.ACTION.ZOOM;
+    controls.touches.one = CameraControlsImpl.ACTION.TOUCH_TRUCK;
+    controls.touches.two = CameraControlsImpl.ACTION.TOUCH_ZOOM_TRUCK;
+    controls.dollyToCursor = true;
     fitHome(initialized.current);
     initialized.current = true;
     invalidate();
@@ -142,21 +142,21 @@ export function CameraRig({
   }, [layout, camera]);
 
   useEffect(() => {
-    const c = ref.current;
-    if (!c || !command) return;
+    const controls = ref.current;
+    if (!controls || !command) return;
     const zoom = (camera as { zoom: number }).zoom;
     switch (command.cmd) {
       case 'zoomIn':
-        void c.zoomTo(zoom * 1.35, true);
+        void controls.zoomTo(zoom * 1.35, true);
         break;
       case 'zoomOut':
-        void c.zoomTo(zoom / 1.35, true);
+        void controls.zoomTo(zoom / 1.35, true);
         break;
       case 'rotate':
-        void c.rotate(Math.PI / 2, 0, true);
+        void controls.rotate(Math.PI / 2, 0, true);
         break;
       case 'reset':
-        void c.rotateAzimuthTo(Math.PI / 4, true);
+        void controls.rotateAzimuthTo(Math.PI / 4, true);
         break;
       case 'home':
         fitHome(true);
@@ -176,17 +176,17 @@ export function CameraRig({
     let tries = 0;
     const attempt = () => {
       if (cancelled) return;
-      const c = ref.current;
+      const controls = ref.current;
       const obj = getObject(objectKey(selection.type, selection.id));
-      if (!c || !obj) {
+      if (!controls || !obj) {
         if (tries++ < 40) setTimeout(attempt, 100);
         return;
       }
-      const p = new Vector3();
-      obj.getWorldPosition(p);
-      void c.moveTo(p.x, 0, p.z, true);
+      const worldPosition = new Vector3();
+      obj.getWorldPosition(worldPosition);
+      void controls.moveTo(worldPosition.x, 0, worldPosition.z, true);
       const zoom = (camera as { zoom: number }).zoom;
-      void c.zoomTo(Math.max(zoom * 1.25, 22), true);
+      void controls.zoomTo(Math.max(zoom * 1.25, 22), true);
     };
     attempt();
     return () => {
@@ -200,48 +200,48 @@ export function CameraRig({
 
 /** Khung chọn 4 góc bám theo vị trí hiển thị của đối tượng (UC-20 E2). */
 export function SelectionBracket() {
-  const selection = useScene((s) => s.selection);
+  const selection = useScene((state) => state.selection);
   const group = useRef<Group>(null);
-  const invalidate = useThree((s) => s.invalidate);
+  const invalidate = useThree((state) => state.invalidate);
   const size = selection?.type === 'truck' ? [3.6, 17] : selection?.type === 'dock' ? [5.4, 2] : selection?.type === 'vehicle' ? [2.6, 5.2] : [2.4, 3];
 
   useFrame(() => {
-    const g = group.current;
-    if (!g || !selection) return;
+    const bracketGroup = group.current;
+    if (!bracketGroup || !selection) return;
     const obj = getObject(objectKey(selection.type, selection.id));
     if (!obj) {
-      g.visible = false;
+      bracketGroup.visible = false;
       return;
     }
-    const p = new Vector3();
-    obj.getWorldPosition(p);
-    if (g.position.distanceTo(p) > 0.01 || !g.visible) {
-      g.visible = true;
-      g.position.copy(p);
-      g.rotation.y = obj.rotation.y;
+    const worldPosition = new Vector3();
+    obj.getWorldPosition(worldPosition);
+    if (bracketGroup.position.distanceTo(worldPosition) > 0.01 || !bracketGroup.visible) {
+      bracketGroup.visible = true;
+      bracketGroup.position.copy(worldPosition);
+      bracketGroup.rotation.y = obj.rotation.y;
       invalidate();
     }
   });
 
   if (!selection) return null;
-  const [w, d] = size;
-  const L = Math.min(w, d) * 0.35;
+  const [width, depth] = size;
+  const armLength = Math.min(width, depth) * 0.35;
   const corners: Array<[number, number, number, number]> = [
-    [-w / 2, -d / 2, 1, 1],
-    [w / 2, -d / 2, -1, 1],
-    [-w / 2, d / 2, 1, -1],
-    [w / 2, d / 2, -1, -1],
+    [-width / 2, -depth / 2, 1, 1],
+    [width / 2, -depth / 2, -1, 1],
+    [-width / 2, depth / 2, 1, -1],
+    [width / 2, depth / 2, -1, -1],
   ];
   return (
     <group ref={group} visible={false}>
-      {corners.map(([x, z, sx, sz], i) => (
-        <group key={i} position={[x, 0.08, z + (selection.type === 'dock' ? 1.2 : 0)]}>
-          <mesh position={[(sx * L) / 2, 0, 0]}>
-            <boxGeometry args={[L, 0.06, 0.18]} />
+      {corners.map(([x, z, sx, sz], cornerIndex) => (
+        <group key={cornerIndex} position={[x, 0.08, z + (selection.type === 'dock' ? 1.2 : 0)]}>
+          <mesh position={[(sx * armLength) / 2, 0, 0]}>
+            <boxGeometry args={[armLength, 0.06, 0.18]} />
             <meshBasicMaterial color="#2f6fe4" />
           </mesh>
-          <mesh position={[0, 0, (sz * L) / 2]}>
-            <boxGeometry args={[0.18, 0.06, L]} />
+          <mesh position={[0, 0, (sz * armLength) / 2]}>
+            <boxGeometry args={[0.18, 0.06, armLength]} />
             <meshBasicMaterial color="#2f6fe4" />
           </mesh>
         </group>

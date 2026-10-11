@@ -1,7 +1,7 @@
 /** Biểu tượng hàng hóa như video: thùng carton, thùng nhựa xanh, mũ bảo hộ, cuộn băng keo, chai nước… */
 export function SkuIcon({ code, size = 22 }: { code: string; size?: number }) {
-  const c = code.toUpperCase();
-  if (c.includes('HLM')) {
+  const upperCode = code.toUpperCase();
+  if (upperCode.includes('HLM')) {
     return (
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
         <path fill="#f6a623" d="M5 21c0-7 5-12 11-12s11 5 11 12z" />
@@ -10,7 +10,7 @@ export function SkuIcon({ code, size = 22 }: { code: string; size?: number }) {
       </svg>
     );
   }
-  if (c.includes('TAPE')) {
+  if (upperCode.includes('TAPE')) {
     return (
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
         <ellipse cx="16" cy="18" rx="11" ry="9" fill="#d9a86c" />
@@ -19,7 +19,7 @@ export function SkuIcon({ code, size = 22 }: { code: string; size?: number }) {
       </svg>
     );
   }
-  if (c.includes('CONT') || c.includes('GLV')) {
+  if (upperCode.includes('CONT') || upperCode.includes('GLV')) {
     return (
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
         <path fill="#2f6fe4" d="M4 10h24l-2 16H6z" />
@@ -28,7 +28,7 @@ export function SkuIcon({ code, size = 22 }: { code: string; size?: number }) {
       </svg>
     );
   }
-  if (c.includes('WATER') || c.includes('JUICE')) {
+  if (upperCode.includes('WATER') || upperCode.includes('JUICE')) {
     return (
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
         <path fill="#dfe6f3" d="M5 12h22v14H5z" />
@@ -37,7 +37,7 @@ export function SkuIcon({ code, size = 22 }: { code: string; size?: number }) {
       </svg>
     );
   }
-  if (c.includes('PEAS') || c.includes('BERRY') || c.startsWith('FRZ')) {
+  if (upperCode.includes('PEAS') || upperCode.includes('BERRY') || upperCode.startsWith('FRZ')) {
     return (
       <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
         <path fill="#e9eef7" d="M6 8h20l-2 18H8z" />

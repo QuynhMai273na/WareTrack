@@ -52,9 +52,9 @@ export class ProblemFilter implements ExceptionFilter {
     }
     if (exception instanceof ZodValidationException) {
       const zodError = exception.getZodError() as ZodError;
-      const p = this.make(400, ErrorCode.VALIDATION_ERROR, 'Request validation failed');
-      p.errors = zodError.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
-      return p;
+      const problem = this.make(400, ErrorCode.VALIDATION_ERROR, 'Request validation failed');
+      problem.errors = zodError.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message }));
+      return problem;
     }
     const db = mapDbError(exception);
     if (db) return this.make(db.status, db.code, db.message, db.details);

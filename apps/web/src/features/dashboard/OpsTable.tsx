@@ -25,7 +25,7 @@ function Progress({ done, total, color = 'bg-ok' }: { done: number; total: numbe
 }
 
 /** Trạng thái hiển thị như video: Loading / Unloading / Docking / En route / At gate / Available… */
-function truckState(status: string, direction: 'INBOUND' | 'OUTBOUND' | undefined, t: (k: string) => string): { label: string; tone: BadgeTone } {
+function truckState(status: string, direction: 'INBOUND' | 'OUTBOUND' | undefined, t: (key: string) => string): { label: string; tone: BadgeTone } {
   switch (status) {
     case 'SCHEDULED':
       return { label: t('v.truck.enRoute'), tone: 'info' };
@@ -44,20 +44,20 @@ function truckState(status: string, direction: 'INBOUND' | 'OUTBOUND' | undefine
 /** Bảng vận hành 2D (FR-11.03) như video: Docks x/y · Forklifts x/y · Trucks n — click dòng mở inspector (AC-05). */
 export function OpsTable({ snapshot, expanded = false }: { snapshot: SiteSnapshot; expanded?: boolean }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
-  const selection = useScene((s) => s.selection);
+  const select = useScene((state) => state.select);
+  const selection = useScene((state) => state.selection);
   const siteId = snapshot.site.id;
   const site = snapshot.site;
-  const trucksById = new Map(snapshot.trucks.map((tr) => [tr.visitId, tr]));
-  const shipmentByVisit = new Map(snapshot.activeShipments.filter((s) => s.visitId).map((s) => [s.visitId!, s]));
-  const busyDocks = snapshot.docks.filter((d) => d.effectiveStatus === 'OCCUPIED' || d.effectiveStatus === 'RESERVED').length;
-  const working = snapshot.forklifts.filter((f) => f.status === 'BUSY' || f.status === 'ASSIGNED').length;
-  const enRoute = snapshot.trucks.filter((tr) => tr.status === 'SCHEDULED' && !tr.dockLocationId && (minutesFromNow(tr.etaAt) ?? 99) <= 10);
-  const trucks = [...snapshot.trucks.filter((tr) => tr.status !== 'SCHEDULED'), ...snapshot.trucks.filter((tr) => tr.status === 'SCHEDULED' && (minutesFromNow(tr.etaAt) ?? 99) <= 15)];
+  const trucksById = new Map(snapshot.trucks.map((truck) => [truck.visitId, truck]));
+  const shipmentByVisit = new Map(snapshot.activeShipments.filter((shipment) => shipment.visitId).map((shipment) => [shipment.visitId!, shipment]));
+  const busyDocks = snapshot.docks.filter((dock) => dock.effectiveStatus === 'OCCUPIED' || dock.effectiveStatus === 'RESERVED').length;
+  const working = snapshot.forklifts.filter((forklift) => forklift.status === 'BUSY' || forklift.status === 'ASSIGNED').length;
+  const enRoute = snapshot.trucks.filter((truck) => truck.status === 'SCHEDULED' && !truck.dockLocationId && (minutesFromNow(truck.etaAt) ?? 99) <= 10);
+  const trucks = [...snapshot.trucks.filter((truck) => truck.status !== 'SCHEDULED'), ...snapshot.trucks.filter((truck) => truck.status === 'SCHEDULED' && (minutesFromNow(truck.etaAt) ?? 99) <= 15)];
   const row = (active: boolean) => cn('flex w-full items-center gap-3 rounded-lg px-2 py-[7px] text-left text-[13px] hover:bg-slate-50', active && 'bg-brand-soft/60');
   const dir = (visitId: string) => {
-    const s = snapshot.activeShipments.find((x) => x.visitId === visitId);
-    return (s?.direction as 'INBOUND' | 'OUTBOUND' | undefined) ?? undefined;
+    const shipment = snapshot.activeShipments.find((candidate) => candidate.visitId === visitId);
+    return (shipment?.direction as 'INBOUND' | 'OUTBOUND' | undefined) ?? undefined;
   };
 
   return (
@@ -80,14 +80,14 @@ export function OpsTable({ snapshot, expanded = false }: { snapshot: SiteSnapsho
         </div>
         <div className={cn('overflow-auto', expanded ? 'max-h-[60vh]' : 'max-h-[150px]')}>
           <TabsContent value="docks">
-            {snapshot.docks.map((d) => {
-              const truck = d.visitId ? trucksById.get(d.visitId) : snapshot.trucks.find((x) => x.dockLocationId === d.locationId);
+            {snapshot.docks.map((dock) => {
+              const truck = dock.visitId ? trucksById.get(dock.visitId) : snapshot.trucks.find((candidate) => candidate.dockLocationId === dock.locationId);
               const shipment = truck ? shipmentByVisit.get(truck.visitId) : undefined;
               const state = truck ? truckState(truck.status, dir(truck.visitId), t) : { label: t('v.dock.available'), tone: 'neutral' as BadgeTone };
               return (
-                <button key={d.locationId} className={row(selection?.id === d.locationId)} onClick={() => select({ siteId, type: truck ? 'truck' : 'dock', id: truck?.visitId ?? d.locationId })}>
+                <button key={dock.locationId} className={row(selection?.id === dock.locationId)} onClick={() => select({ siteId, type: truck ? 'truck' : 'dock', id: truck?.visitId ?? dock.locationId })}>
                   <div className="w-14 leading-tight">
-                    <div className="font-semibold">{locationLabels.get(d.locationId)?.label ?? d.code}</div>
+                    <div className="font-semibold">{locationLabels.get(dock.locationId)?.label ?? dock.code}</div>
                     <div className="text-[11px] text-muted">{site.code}</div>
                   </div>
                   <div className="flex-1 truncate">
@@ -108,44 +108,44 @@ export function OpsTable({ snapshot, expanded = false }: { snapshot: SiteSnapsho
                 </button>
               );
             })}
-            {enRoute.map((tr) => (
-              <button key={tr.visitId} className={row(selection?.id === tr.visitId)} onClick={() => select({ siteId, type: 'truck', id: tr.visitId })}>
+            {enRoute.map((truck) => (
+              <button key={truck.visitId} className={row(selection?.id === truck.visitId)} onClick={() => select({ siteId, type: 'truck', id: truck.visitId })}>
                 <div className="w-14 leading-tight">
                   <div className="font-semibold">{t('v.ops.inbound')}</div>
                   <div className="text-[11px] text-muted">{site.code}</div>
                 </div>
                 <div className="flex-1 truncate">
-                  <span className={cn('mr-1.5 inline-block h-2 w-2 rounded-full', DOT[short(tr.carrier)] ?? 'bg-brand')} />
-                  {tr.truckCode} · {short(tr.carrier)}
+                  <span className={cn('mr-1.5 inline-block h-2 w-2 rounded-full', DOT[short(truck.carrier)] ?? 'bg-brand')} />
+                  {truck.truckCode} · {short(truck.carrier)}
                 </div>
                 <Badge tone="info" className="w-[78px] justify-center">
                   {t('v.truck.enRoute')}
                 </Badge>
-                <span className="w-16 text-xs text-muted">{Math.max(1, minutesFromNow(tr.etaAt) ?? 1)} min</span>
+                <span className="w-16 text-xs text-muted">{Math.max(1, minutesFromNow(truck.etaAt) ?? 1)} min</span>
                 <ChevronRight size={14} className="text-muted" />
               </button>
             ))}
           </TabsContent>
           <TabsContent value="forklifts">
-            {snapshot.forklifts.map((f) => {
-              const busy = f.status === 'BUSY' || f.status === 'ASSIGNED';
-              const label = busy ? (f.taskSummary?.startsWith('Unloading') ? t('v.truck.unloading') : t('v.truck.loading')) : f.status === 'CHARGING' ? t('v.fl.charging') : f.status === 'AVAILABLE' ? t('v.fl.idle') : t(`status.${f.status}`);
+            {snapshot.forklifts.map((forklift) => {
+              const busy = forklift.status === 'BUSY' || forklift.status === 'ASSIGNED';
+              const label = busy ? (forklift.taskSummary?.startsWith('Unloading') ? t('v.truck.unloading') : t('v.truck.loading')) : forklift.status === 'CHARGING' ? t('v.fl.charging') : forklift.status === 'AVAILABLE' ? t('v.fl.idle') : t(`status.${forklift.status}`);
               return (
-                <button key={f.id} className={row(selection?.id === f.id)} onClick={() => select({ siteId, type: 'forklift', id: f.id })}>
+                <button key={forklift.id} className={row(selection?.id === forklift.id)} onClick={() => select({ siteId, type: 'forklift', id: forklift.id })}>
                   <div className="w-14 leading-tight">
-                    <div className="font-semibold">{f.code}</div>
+                    <div className="font-semibold">{forklift.code}</div>
                     <div className="text-[11px] text-muted">{site.code}</div>
                   </div>
-                  <div className="flex-1 truncate text-muted">{busy ? f.taskSummary : f.status === 'CHARGING' ? 'Charging at bay' : f.status === 'AVAILABLE' ? 'Waiting for work' : f.model}</div>
-                  <Badge tone={busy ? 'ok' : f.status === 'CHARGING' ? 'warn' : 'neutral'} className="w-[78px] justify-center">
+                  <div className="flex-1 truncate text-muted">{busy ? forklift.taskSummary : forklift.status === 'CHARGING' ? 'Charging at bay' : forklift.status === 'AVAILABLE' ? 'Waiting for work' : forklift.model}</div>
+                  <Badge tone={busy ? 'ok' : forklift.status === 'CHARGING' ? 'warn' : 'neutral'} className="w-[78px] justify-center">
                     {label}
                   </Badge>
-                  {f.batteryPct !== null ? (
+                  {forklift.batteryPct !== null ? (
                     <div className="w-16">
                       <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-ok" style={{ width: `${f.batteryPct}%` }} />
+                        <div className="h-full rounded-full bg-ok" style={{ width: `${forklift.batteryPct}%` }} />
                       </div>
-                      <div className="tabular mt-0.5 text-[11px] text-muted">{f.batteryPct}%</div>
+                      <div className="tabular mt-0.5 text-[11px] text-muted">{forklift.batteryPct}%</div>
                     </div>
                   ) : null}
                   <ChevronRight size={14} className="text-muted" />
@@ -154,26 +154,26 @@ export function OpsTable({ snapshot, expanded = false }: { snapshot: SiteSnapsho
             })}
           </TabsContent>
           <TabsContent value="trucks">
-            {trucks.map((tr) => {
-              const dock = tr.dockLocationId ? snapshot.docks.find((d) => d.locationId === tr.dockLocationId) : undefined;
-              const shipment = shipmentByVisit.get(tr.visitId);
-              const state = truckState(tr.status, dir(tr.visitId), t);
-              const atDock = ['HANDLING', 'AT_DOCK', 'READY_TO_LEAVE'].includes(tr.status);
+            {trucks.map((truck) => {
+              const dock = truck.dockLocationId ? snapshot.docks.find((candidate) => candidate.locationId === truck.dockLocationId) : undefined;
+              const shipment = shipmentByVisit.get(truck.visitId);
+              const state = truckState(truck.status, dir(truck.visitId), t);
+              const atDock = ['HANDLING', 'AT_DOCK', 'READY_TO_LEAVE'].includes(truck.status);
               return (
-                <button key={tr.visitId} className={row(selection?.id === tr.visitId)} onClick={() => select({ siteId, type: 'truck', id: tr.visitId })}>
+                <button key={truck.visitId} className={row(selection?.id === truck.visitId)} onClick={() => select({ siteId, type: 'truck', id: truck.visitId })}>
                   <div className="w-[74px] leading-tight">
-                    <div className="font-semibold">{tr.truckCode}</div>
-                    <div className="text-[11px] text-muted">{short(tr.carrier)}</div>
+                    <div className="font-semibold">{truck.truckCode}</div>
+                    <div className="text-[11px] text-muted">{short(truck.carrier)}</div>
                   </div>
                   <div className="flex-1 truncate">
-                    <span className={cn('mr-1.5 inline-block h-2 w-2 rounded-full', DOT[short(tr.carrier)] ?? 'bg-brand')} />
+                    <span className={cn('mr-1.5 inline-block h-2 w-2 rounded-full', DOT[short(truck.carrier)] ?? 'bg-brand')} />
                     {atDock ? `${site.code} · ${(dock ? locationLabels.get(dock.locationId)?.label : undefined) ?? dock?.code ?? ''}` : `${t('v.truck.to')} ${site.code}`}
                   </div>
                   <Badge tone={state.tone} className="w-[78px] justify-center">
                     {state.label}
                   </Badge>
                   <div className="w-16 text-xs text-muted">
-                    {atDock && shipment ? <Progress done={shipment.progress.done} total={shipment.progress.total} /> : tr.status === 'DOCK_ASSIGNED' ? 'docking' : tr.status === 'SCHEDULED' || tr.status === 'AT_GATE' ? `${Math.max(1, minutesFromNow(tr.etaAt) ?? 2)} min` : ''}
+                    {atDock && shipment ? <Progress done={shipment.progress.done} total={shipment.progress.total} /> : truck.status === 'DOCK_ASSIGNED' ? 'docking' : truck.status === 'SCHEDULED' || truck.status === 'AT_GATE' ? `${Math.max(1, minutesFromNow(truck.etaAt) ?? 2)} min` : ''}
                   </div>
                   <ChevronRight size={14} className="text-muted" />
                 </button>

@@ -42,21 +42,21 @@ interface UiStep {
 function Stepper({ steps }: { steps: UiStep[] }) {
   return (
     <div className="flex flex-1 items-start">
-      {steps.map((s, i) => (
-        <div key={s.key} className="relative flex flex-1 flex-col items-center text-center">
-          {i > 0 ? <div className={cn('absolute right-1/2 top-[17px] h-[3px] w-full -translate-y-1/2', s.state === 'pending' ? 'bg-slate-200' : 'bg-brand')} /> : null}
+      {steps.map((step, stepIndex) => (
+        <div key={step.key} className="relative flex flex-1 flex-col items-center text-center">
+          {stepIndex > 0 ? <div className={cn('absolute right-1/2 top-[17px] h-[3px] w-full -translate-y-1/2', step.state === 'pending' ? 'bg-slate-200' : 'bg-brand')} /> : null}
           <div
             className={cn(
               'relative z-10 flex h-[34px] w-[34px] items-center justify-center rounded-full border-2',
-              s.state === 'done' && 'border-brand bg-brand text-white',
-              s.state === 'current' && 'border-brand bg-brand text-white ring-[5px] ring-brand-soft',
-              s.state === 'pending' && 'border-slate-200 bg-slate-50 text-slate-400',
+              step.state === 'done' && 'border-brand bg-brand text-white',
+              step.state === 'current' && 'border-brand bg-brand text-white ring-[5px] ring-brand-soft',
+              step.state === 'pending' && 'border-slate-200 bg-slate-50 text-slate-400',
             )}
           >
-            {s.icon}
+            {step.icon}
           </div>
-          <div className="mt-2 text-[12px] font-medium">{s.label}</div>
-          <div className="tabular text-[11px] text-muted">{s.time}</div>
+          <div className="mt-2 text-[12px] font-medium">{step.label}</div>
+          <div className="tabular text-[11px] text-muted">{step.time}</div>
         </div>
       ))}
     </div>
@@ -66,18 +66,18 @@ function Stepper({ steps }: { steps: UiStep[] }) {
 /** Shipment Tracking như video — milestone thật từ backend, ETA ghi rõ là ETA (UC-19-AC2, BR-30). */
 function ShipmentTracker({ siteId, shipmentId, timeZone, siteCode, siteName }: { siteId: string; shipmentId: string; timeZone: string; siteCode: string; siteName: string }) {
   const { t } = useTranslation();
-  const { data: s } = useShipment(siteId, shipmentId);
-  if (!s) return null;
-  const toUi = (st: TrackingStep): UiStep => ({
-    key: st.key,
-    label: `${t(`v.steps.${st.key}`)}${st.progress && (st.state === 'CURRENT' || st.key === 'LOADING' || st.key === 'UNLOADING') && st.state !== 'PENDING' ? ` ${st.progress.done}/${st.progress.total}` : ''}`,
-    state: st.state === 'DONE' ? 'done' : st.state === 'CURRENT' ? 'current' : 'pending',
-    time: st.at && st.state === 'DONE' ? formatTime(st.at, timeZone) : st.eta ? `ETA ${formatTime(st.eta, timeZone)}` : st.at ? formatTime(st.at, timeZone) : '—',
-    icon: STEP_ICON[st.key] ?? <Package size={15} />,
+  const { data: shipment } = useShipment(siteId, shipmentId);
+  if (!shipment) return null;
+  const toUi = (step: TrackingStep): UiStep => ({
+    key: step.key,
+    label: `${t(`v.steps.${step.key}`)}${step.progress && (step.state === 'CURRENT' || step.key === 'LOADING' || step.key === 'UNLOADING') && step.state !== 'PENDING' ? ` ${step.progress.done}/${step.progress.total}` : ''}`,
+    state: step.state === 'DONE' ? 'done' : step.state === 'CURRENT' ? 'current' : 'pending',
+    time: step.at && step.state === 'DONE' ? formatTime(step.at, timeZone) : step.eta ? `ETA ${formatTime(step.eta, timeZone)}` : step.at ? formatTime(step.at, timeZone) : '—',
+    icon: STEP_ICON[step.key] ?? <Package size={15} />,
   });
-  const work = s.steps.find((x) => x.key === (s.direction === 'OUTBOUND' ? 'LOADING' : 'UNLOADING'));
+  const work = shipment.steps.find((step) => step.key === (shipment.direction === 'OUTBOUND' ? 'LOADING' : 'UNLOADING'));
   const left = minutesFromNow(work?.eta ?? null);
-  const statusLabel = s.status === 'LOADING' ? t('v.truck.loading') : s.status === 'UNLOADING' || s.status === 'ARRIVED' ? t('v.truck.unloading') : s.status === 'EXPECTED' ? t('v.truck.enRoute') : t(`shipmentStatus.${s.status}`);
+  const statusLabel = shipment.status === 'LOADING' ? t('v.truck.loading') : shipment.status === 'UNLOADING' || shipment.status === 'ARRIVED' ? t('v.truck.unloading') : shipment.status === 'EXPECTED' ? t('v.truck.enRoute') : t(`shipmentStatus.${shipment.status}`);
   return (
     <div className="card pointer-events-auto w-[956px] max-w-[calc(100vw-560px)] p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -85,20 +85,20 @@ function ShipmentTracker({ siteId, shipmentId, timeZone, siteCode, siteName }: {
           <Truck size={19} className="text-brand" /> {t('v.tracking.title')}
         </div>
         <div className="text-xs text-muted">
-          {s.visit?.truckCode ?? '—'} · {(s.carrier?.name ?? '').split(' ')[0]}
+          {shipment.visit?.truckCode ?? '—'} · {(shipment.carrier?.name ?? '').split(' ')[0]}
         </div>
       </div>
       <div className="flex items-center gap-4">
-        <Stepper steps={s.steps.map(toUi)} />
+        <Stepper steps={shipment.steps.map(toUi)} />
         <div className="flex w-[284px] items-center gap-3 rounded-xl bg-slate-50 p-3 text-xs">
           <TruckGlyph />
           <div className="min-w-0 flex-1">
-            <div className="text-[13px] font-semibold">#{s.code}</div>
-            <div className="truncate text-muted">{s.direction === 'OUTBOUND' ? `To: ${s.destinationText ?? '—'}` : `To: ${siteCode} ${siteName}`}</div>
+            <div className="text-[13px] font-semibold">#{shipment.code}</div>
+            <div className="truncate text-muted">{shipment.direction === 'OUTBOUND' ? `To: ${shipment.destinationText ?? '—'}` : `To: ${siteCode} ${siteName}`}</div>
             <div className="mt-1 inline-block rounded-md bg-ok-soft px-1.5 py-0.5 font-medium text-ok">{statusLabel}</div>
             <div className="mt-1 truncate text-muted">
-              {siteCode} · {s.visit?.dockCode ?? '—'}
-              {left !== null && left > 0 && !['DISPATCHED', 'DELIVERED', 'RECEIVED', 'CLOSED'].includes(s.status) ? ` · ${left} min left` : ''}
+              {siteCode} · {shipment.visit?.dockCode ?? '—'}
+              {left !== null && left > 0 && !['DISPATCHED', 'DELIVERED', 'RECEIVED', 'CLOSED'].includes(shipment.status) ? ` · ${left} min left` : ''}
             </div>
           </div>
           <ChevronRight size={16} className="text-muted" />
@@ -111,15 +111,15 @@ function ShipmentTracker({ siteId, shipmentId, timeZone, siteCode, siteName }: {
 /** Ưu tiên shipment của xe đang chọn; không có thì shipment đang xếp/dỡ của site (FR-10.04). */
 export function Tracker({ snapshot, timeZone }: { snapshot: SiteSnapshot; timeZone: string }) {
   const { t } = useTranslation();
-  const selection = useScene((s) => s.selection);
+  const selection = useScene((state) => state.selection);
   const siteId = snapshot.site.id;
   const selectedVisit = selection?.type === 'truck' && selection.siteId === siteId ? selection.id : undefined;
-  const handling = new Set(snapshot.trucks.filter((x) => x.status === 'HANDLING').map((x) => x.visitId));
+  const handling = new Set(snapshot.trucks.filter((truck) => truck.status === 'HANDLING').map((truck) => truck.visitId));
   const shipment = selectedVisit
-    ? snapshot.activeShipments.find((s) => s.visitId === selectedVisit)
-    : (snapshot.activeShipments.find((s) => s.visitId && handling.has(s.visitId) && s.status === 'LOADING') ??
-      snapshot.activeShipments.find((s) => s.visitId && handling.has(s.visitId)) ??
-      snapshot.activeShipments.find((s) => ['LOADING', 'UNLOADING'].includes(s.status)) ??
+    ? snapshot.activeShipments.find((activeShipment) => activeShipment.visitId === selectedVisit)
+    : (snapshot.activeShipments.find((activeShipment) => activeShipment.visitId && handling.has(activeShipment.visitId) && activeShipment.status === 'LOADING') ??
+      snapshot.activeShipments.find((activeShipment) => activeShipment.visitId && handling.has(activeShipment.visitId)) ??
+      snapshot.activeShipments.find((activeShipment) => ['LOADING', 'UNLOADING'].includes(activeShipment.status)) ??
       snapshot.activeShipments[0]);
   if (shipment) return <ShipmentTracker siteId={siteId} shipmentId={shipment.id} timeZone={timeZone} siteCode={snapshot.site.code} siteName={snapshot.site.name} />;
   return (

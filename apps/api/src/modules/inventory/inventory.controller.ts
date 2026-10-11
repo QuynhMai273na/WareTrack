@@ -50,30 +50,30 @@ export class SkusController {
   ) {}
 
   @Get()
-  async list(@Query('q') q?: string) {
+  async list(@Query('q') searchText?: string) {
     const rows = await this.prisma.sku.findMany({
-      where: { deletedAt: null, ...(q ? { OR: [{ code: { contains: q, mode: 'insensitive' } }, { name: { contains: q, mode: 'insensitive' } }] } : {}) },
+      where: { deletedAt: null, ...(searchText ? { OR: [{ code: { contains: searchText, mode: 'insensitive' } }, { name: { contains: searchText, mode: 'insensitive' } }] } : {}) },
       orderBy: { code: 'asc' },
       take: 500,
     });
-    return rows.map((s) => this.query.skuDto(s));
+    return rows.map((sku) => this.query.skuDto(sku));
   }
 
   @Post()
   @RequirePermission('master.sku.manage')
   create(@Body() body: CreateSkuDto) {
     return this.tx.run(async (tx) => {
-      const s = await tx.sku.create({ data: { ...body, unitWeightKg: body.unitWeightKg ?? null, lowStockThreshold: body.lowStockThreshold ?? null } });
-      await this.audit.record(tx, { siteId: null, action: 'SKU_CREATED', entityType: 'Sku', entityId: s.id, diff: { after: { code: s.code } } });
-      return this.query.skuDto(s);
+      const sku = await tx.sku.create({ data: { ...body, unitWeightKg: body.unitWeightKg ?? null, lowStockThreshold: body.lowStockThreshold ?? null } });
+      await this.audit.record(tx, { siteId: null, action: 'SKU_CREATED', entityType: 'Sku', entityId: sku.id, diff: { after: { code: sku.code } } });
+      return this.query.skuDto(sku);
     });
   }
 
   @Get(':skuId')
   async get(@Param('skuId') id: string) {
-    const s = await this.prisma.sku.findFirst({ where: { id, deletedAt: null } });
-    if (!s) throw DomainError.notFound('SKU');
-    return this.query.skuDto(s);
+    const sku = await this.prisma.sku.findFirst({ where: { id, deletedAt: null } });
+    if (!sku) throw DomainError.notFound('SKU');
+    return this.query.skuDto(sku);
   }
 
   @Patch(':skuId')
@@ -113,8 +113,8 @@ export class InventoryController {
 
   @Get('inventory/balances')
   @RequirePermission('inventory.read')
-  balances(@Param('siteId') siteId: string, @Query('skuId') skuId?: string, @Query('locationId') locationId?: string, @Query('huId') huId?: string, @Query('status') status?: string, @Query('q') q?: string) {
-    return this.query.balances(siteId, { skuId, locationId, huId, status, q });
+  balances(@Param('siteId') siteId: string, @Query('skuId') skuId?: string, @Query('locationId') locationId?: string, @Query('huId') huId?: string, @Query('status') status?: string, @Query('q') searchText?: string) {
+    return this.query.balances(siteId, { skuId, locationId, huId, status, q: searchText });
   }
 
   @Get('inventory/availability')
@@ -133,8 +133,8 @@ export class InventoryController {
   @RequirePermission('inventory.reversal')
   async reverse(@Param('siteId') siteId: string, @Param('txId') txId: string, @Body() body: ReverseDto) {
     if (!/^\d+$/.test(txId)) throw DomainError.notFound('Inventory transaction');
-    const t = await this.stock.reverse(siteId, BigInt(txId), body.reason);
-    return { id: String(t.id), txType: t.txType };
+    const reversalTx = await this.stock.reverse(siteId, BigInt(txId), body.reason);
+    return { id: String(reversalTx.id), txType: reversalTx.txType };
   }
 
   @Post('inventory/status-changes')
@@ -154,7 +154,7 @@ export class InventoryController {
   @RequirePermission('inventory.adjust.request')
   async requestAdjustment(@Param('siteId') siteId: string, @Body() body: CreateAdjustmentDto) {
     const adj = await this.stock.requestAdjustment(siteId, body);
-    return (await this.query.adjustments(siteId)).find((a) => a.id === adj.id);
+    return (await this.query.adjustments(siteId)).find((adjustment) => adjustment.id === adj.id);
   }
 
   @Post('inventory/adjustments/:adjId/approve')
@@ -162,7 +162,7 @@ export class InventoryController {
   @HttpCode(200)
   async approve(@Param('siteId') siteId: string, @Param('adjId') adjId: string, @Body() body: DecisionDto) {
     await this.stock.approveAdjustment(siteId, adjId, body);
-    return (await this.query.adjustments(siteId)).find((a) => a.id === adjId);
+    return (await this.query.adjustments(siteId)).find((adjustment) => adjustment.id === adjId);
   }
 
   @Post('inventory/adjustments/:adjId/reject')
@@ -170,13 +170,13 @@ export class InventoryController {
   @HttpCode(200)
   async reject(@Param('siteId') siteId: string, @Param('adjId') adjId: string, @Body() body: DecisionDto) {
     await this.stock.rejectAdjustment(siteId, adjId, body);
-    return (await this.query.adjustments(siteId)).find((a) => a.id === adjId);
+    return (await this.query.adjustments(siteId)).find((adjustment) => adjustment.id === adjId);
   }
 
   @Get('pallets')
   @RequirePermission('inventory.read')
-  palletList(@Param('siteId') siteId: string, @Query('lifecycle') lifecycle?: string, @Query('q') q?: string) {
-    return this.query.pallets(siteId, { lifecycle, q });
+  palletList(@Param('siteId') siteId: string, @Query('lifecycle') lifecycle?: string, @Query('q') searchText?: string) {
+    return this.query.pallets(siteId, { lifecycle, q: searchText });
   }
 
   @Get('pallets/:huId')
@@ -245,8 +245,8 @@ export class InventoryController {
   @RequirePermission('inventory.count.manage')
   @HttpCode(200)
   async complete(@Param('siteId') siteId: string, @Param('countId') id: string, @Body() body: CompleteCountDto) {
-    const r = await this.counts.complete(siteId, id, body.createAdjustments);
-    return { ...(await this.counts.get(siteId, id, true)), adjustmentsCreated: r.adjustments };
+    const completion = await this.counts.complete(siteId, id, body.createAdjustments);
+    return { ...(await this.counts.get(siteId, id, true)), adjustmentsCreated: completion.adjustments };
   }
 
   @Post('stock-counts/:countId/cancel')

@@ -27,54 +27,54 @@ const ICONS: Record<string, ReactNode> = {
 const SLOTS = ['STOCK_ON_HAND_PALLETS', 'TRUCKS_ON_SITE', 'ON_TIME_DELIVERY'];
 const VEHICLE_SLOTS = ['VEHICLES_STORED', 'YARD_OCCUPANCY', 'VEHICLE_RELEASES'];
 
-function formatValue(k: KpiDto) {
-  if (k.value === null) return 'N/A';
-  if (k.unit === '%') return `${k.value.toFixed(1)}%`;
-  return k.value.toLocaleString('en-US');
+function formatValue(kpi: KpiDto) {
+  if (kpi.value === null) return 'N/A';
+  if (kpi.unit === '%') return `${kpi.value.toFixed(1)}%`;
+  return kpi.value.toLocaleString('en-US');
 }
 
 export function KpiBar({ kpis, siteCode }: { kpis: KpiDto[]; siteCode: string }) {
   const { t } = useTranslation();
-  const slots = kpis.some((k) => k.key === 'VEHICLES_STORED') ? VEHICLE_SLOTS : SLOTS;
-  const picked = slots.map((key) => kpis.find((x) => x.key === key)).filter((k): k is KpiDto => !!k);
-  const sub = (k: KpiDto) => {
-    switch (k.key) {
+  const slots = kpis.some((kpi) => kpi.key === 'VEHICLES_STORED') ? VEHICLE_SLOTS : SLOTS;
+  const picked = slots.map((key) => kpis.find((kpi) => kpi.key === key)).filter((kpi): kpi is KpiDto => !!kpi);
+  const sub = (kpi: KpiDto) => {
+    switch (kpi.key) {
       case 'STOCK_ON_HAND_PALLETS':
         return t('v.kpi.pallets');
       case 'TRUCKS_ON_SITE':
-        return t('v.kpi.inbound', { n: k.sub?.inbound ?? 0 });
+        return t('v.kpi.inbound', { n: kpi.sub?.inbound ?? 0 });
       case 'ON_TIME_DELIVERY':
         return t('v.kpi.last30');
       case 'VEHICLES_STORED':
-        return t('kpi.onHold', { n: k.sub?.onHold ?? 0 });
+        return t('kpi.onHold', { n: kpi.sub?.onHold ?? 0 });
       case 'VEHICLE_RELEASES':
-        return t('kpi.approvedReleases', { n: k.sub?.approved ?? 0 });
+        return t('kpi.approvedReleases', { n: kpi.sub?.approved ?? 0 });
       default:
-        return k.unit === '%' ? `${k.sub?.used ?? 0}/${k.total ?? 0}` : k.unit;
+        return kpi.unit === '%' ? `${kpi.sub?.used ?? 0}/${kpi.total ?? 0}` : kpi.unit;
     }
   };
-  const delta = (k: KpiDto) => {
-    if (k.delta === null || k.delta === undefined) return null;
-    if (k.unit === '%') return `${k.delta >= 0 ? '+' : ''}${k.delta.toFixed(1)}%`;
-    return `+${k.delta}`;
+  const delta = (kpi: KpiDto) => {
+    if (kpi.delta === null || kpi.delta === undefined) return null;
+    if (kpi.unit === '%') return `${kpi.delta >= 0 ? '+' : ''}${kpi.delta.toFixed(1)}%`;
+    return `+${kpi.delta}`;
   };
   return (
     <div className="pointer-events-auto flex flex-wrap gap-3">
-      {picked.map((k) => (
-        <div key={k.key} className="card flex w-[234px] items-center gap-3.5 px-4 py-3.5">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-soft/70">{ICONS[k.key] ?? <CubeIcon />}</div>
+      {picked.map((kpi) => (
+        <div key={kpi.key} className="card flex w-[234px] items-center gap-3.5 px-4 py-3.5">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-soft/70">{ICONS[kpi.key] ?? <CubeIcon />}</div>
           <div className="min-w-0 leading-tight">
-            <div className="text-[13px] text-ink/80">{t(`v.kpi.${k.key}`, { defaultValue: t(`kpi.${k.key}`) })}</div>
+            <div className="text-[13px] text-ink/80">{t(`v.kpi.${kpi.key}`, { defaultValue: t(`kpi.${kpi.key}`) })}</div>
             <div className="flex items-baseline gap-2">
-              <span className="tabular text-[22px] font-bold tracking-tight">{formatValue(k)}</span>
-              {delta(k) !== null ? (
+              <span className="tabular text-[22px] font-bold tracking-tight">{formatValue(kpi)}</span>
+              {delta(kpi) !== null ? (
                 <span className="flex items-center text-xs font-semibold text-ok">
-                  <ArrowUp size={12} strokeWidth={2.5} /> {delta(k)}
+                  <ArrowUp size={12} strokeWidth={2.5} /> {delta(kpi)}
                 </span>
               ) : null}
             </div>
             <div className="truncate text-[11px] text-muted">
-              {sub(k)} · {siteCode}
+              {sub(kpi)} · {siteCode}
             </div>
           </div>
         </div>

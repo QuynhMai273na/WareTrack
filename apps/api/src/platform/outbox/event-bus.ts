@@ -17,9 +17,9 @@ export class PublishedEventBus {
   }
 
   async dispatch(event: RealtimeEnvelope) {
-    for (const h of this.handlers) {
+    for (const handler of this.handlers) {
       try {
-        await h(event);
+        await handler(event);
       } catch (err) {
         this.logger.error(`Handler failed for ${event.type}: ${(err as Error).message}`);
       }

@@ -30,7 +30,7 @@ export function env(): Env {
   if (!cached) {
     const parsed = EnvSchema.safeParse(process.env);
     if (!parsed.success) {
-      const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
       throw new Error(`Invalid environment: ${issues}`);
     }
     cached = parsed.data;
@@ -41,6 +41,6 @@ export function env(): Env {
 export function webOrigins(): string[] {
   return env()
     .WEB_ORIGIN.split(',')
-    .map((s) => s.trim())
+    .map((origin) => origin.trim())
     .filter(Boolean);
 }
