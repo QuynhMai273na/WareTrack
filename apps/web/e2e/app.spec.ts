@@ -49,6 +49,19 @@ test.describe('WareTrack demo', () => {
     await expect(page.getByText(text).first()).toBeVisible();
   });
 
+  test('admin: sites list and layout editor', async ({ page }) => {
+    await login(page, 'admin');
+    await page.goto('/admin/sites');
+    await expect(page.getByTestId('site-row-WH-01')).toBeVisible();
+    await page.getByTestId('site-row-WH-01').getByText(/Edit layout|Vẽ sơ đồ/).click();
+    await expect(page.getByTestId('blueprint-canvas')).toBeVisible();
+    await page.getByTestId('add-dock').click();
+    await expect(page.getByTestId('dock-label')).toBeVisible();
+    // Quản trị user chỉ dành cho admin / site manager
+    await page.goto('/admin/users');
+    await expect(page.getByTestId('user-row-manager')).toBeVisible();
+  });
+
   test('viewer cannot see management pages', async ({ page }) => {
     await login(page, 'viewer');
     await page.goto('/sites/WH-01');

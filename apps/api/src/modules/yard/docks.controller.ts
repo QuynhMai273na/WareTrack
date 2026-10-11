@@ -24,26 +24,26 @@ export class DocksController {
       include: { dock: true },
       orderBy: { code: 'asc' },
     });
-    const occ = await this.occupancy.activeByLocations(siteId, docks.map((d) => d.id));
-    const visitIds = [...occ.values()].flat().filter((o) => o.occupantType === 'TRUCK_VISIT').map((o) => o.occupantId);
+    const occ = await this.occupancy.activeByLocations(siteId, docks.map((dock) => dock.id));
+    const visitIds = [...occ.values()].flat().filter((occupancy) => occupancy.occupantType === 'TRUCK_VISIT').map((occupancy) => occupancy.occupantId);
     const visits = new Map(
       (
         await this.prisma.truckVisit.findMany({ where: { id: { in: visitIds } }, include: { truck: { include: { carrier: true } }, driver: true } })
-      ).map((v) => [v.id, v]),
+      ).map((visit) => [visit.id, visit]),
     );
-    return docks.map((d) => {
-      const o = occ.get(d.id) ?? [];
-      const current = o.find((x) => x.occupantType === 'TRUCK_VISIT');
+    return docks.map((dock) => {
+      const occupancies = occ.get(dock.id) ?? [];
+      const current = occupancies.find((occupancy) => occupancy.occupantType === 'TRUCK_VISIT');
       const visit = current ? visits.get(current.occupantId) : undefined;
       return {
-        locationId: d.id,
-        code: d.code,
-        direction: d.dock?.direction ?? 'BOTH',
-        doorNumber: d.dock?.doorNumber ?? null,
-        effectiveStatus: effectiveStatus(d, o).status,
-        blockedReason: d.blockedReason,
-        visit: visit ? this.visits.toRow(visit, new Map([[d.id, d]])) : null,
-        version: d.version,
+        locationId: dock.id,
+        code: dock.code,
+        direction: dock.dock?.direction ?? 'BOTH',
+        doorNumber: dock.dock?.doorNumber ?? null,
+        effectiveStatus: effectiveStatus(dock, occupancies).status,
+        blockedReason: dock.blockedReason,
+        visit: visit ? this.visits.toRow(visit, new Map([[dock.id, dock]])) : null,
+        version: dock.version,
       };
     });
   }

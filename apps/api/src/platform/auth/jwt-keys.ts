@@ -13,11 +13,11 @@ export interface JwtKeys {
  * Production: lấy từ biến môi trường (secret của Render). Dev: tự sinh và lưu vào apps/api/.keys (gitignored).
  */
 export function loadJwtKeys(): JwtKeys {
-  const e = env();
-  if (e.JWT_PRIVATE_KEY && e.JWT_PUBLIC_KEY) {
-    return { privateKey: e.JWT_PRIVATE_KEY.replace(/\\n/g, '\n'), publicKey: e.JWT_PUBLIC_KEY.replace(/\\n/g, '\n') };
+  const environment = env();
+  if (environment.JWT_PRIVATE_KEY && environment.JWT_PUBLIC_KEY) {
+    return { privateKey: environment.JWT_PRIVATE_KEY.replace(/\\n/g, '\n'), publicKey: environment.JWT_PUBLIC_KEY.replace(/\\n/g, '\n') };
   }
-  if (e.NODE_ENV === 'production') {
+  if (environment.NODE_ENV === 'production') {
     throw new Error('JWT_PRIVATE_KEY and JWT_PUBLIC_KEY are required in production');
   }
   const dir = join(process.cwd(), '.keys');

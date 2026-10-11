@@ -14,11 +14,11 @@ type LocationWithRefs = Location & { zone: Zone; dock: Dock | null };
 
 /** Trạng thái hiệu lực = block + occupancy; không lưu cột status riêng (mục 9.3, 9.4). */
 export function effectiveStatus(loc: Location, occ: ActiveOccupancy[]): { status: EffectiveLocationStatus; unitsUsed: number } {
-  const unitsUsed = occ.reduce((s, o) => s + o.unitsUsed, 0);
+  const unitsUsed = occ.reduce((sum, occupancy) => sum + occupancy.unitsUsed, 0);
   if (loc.blockedAt) return { status: loc.locationType === 'DOCK' ? 'OUT_OF_SERVICE' : 'BLOCKED', unitsUsed };
   if (loc.singleOccupancy) {
-    if (occ.some((o) => o.kind === 'OCCUPIED')) return { status: 'OCCUPIED', unitsUsed };
-    if (occ.some((o) => o.kind === 'RESERVED')) return { status: 'RESERVED', unitsUsed };
+    if (occ.some((occupancy) => occupancy.kind === 'OCCUPIED')) return { status: 'OCCUPIED', unitsUsed };
+    if (occ.some((occupancy) => occupancy.kind === 'RESERVED')) return { status: 'RESERVED', unitsUsed };
     return { status: 'AVAILABLE', unitsUsed };
   }
   return { status: unitsUsed >= Number(loc.capacityUnits) ? 'OCCUPIED' : 'AVAILABLE', unitsUsed };
@@ -32,6 +32,7 @@ export function toLocationDto(loc: LocationWithRefs, occ: ActiveOccupancy[]): Lo
     zoneId: loc.zoneId,
     zoneCode: loc.zone.code,
     code: loc.code,
+    name: loc.name,
     qrValue: loc.qrValue,
     locationType: loc.locationType,
     capacityUnits: Number(loc.capacityUnits),
@@ -59,7 +60,7 @@ export class SitesService {
 
   async listSites(siteIds: string[]): Promise<SiteSummary[]> {
     const sites = await this.prisma.site.findMany({ where: { id: { in: siteIds }, deletedAt: null }, orderBy: { code: 'asc' } });
-    return Promise.all(sites.map(async (s) => ({ ...this.siteBase(s), fill: await this.fill(s.id) })));
+    return Promise.all(sites.map(async (site) => ({ ...this.siteBase(site), fill: await this.fill(site.id) })));
   }
 
   async getSite(siteId: string) {
@@ -68,8 +69,8 @@ export class SitesService {
     return { ...this.siteBase(site), fill: await this.fill(siteId) };
   }
 
-  private siteBase(s: { id: string; code: string; name: string; siteType: SiteSummary['siteType']; timezone: string; addressLine: string | null; operationalStatus: string; mapX: number; mapZ: number }) {
-    return { id: s.id, code: s.code, name: s.name, siteType: s.siteType, timezone: s.timezone, addressLine: s.addressLine, operationalStatus: s.operationalStatus, map: { x: s.mapX, z: s.mapZ } };
+  private siteBase(site: { id: string; code: string; name: string; siteType: SiteSummary['siteType']; timezone: string; addressLine: string | null; operationalStatus: string; mapX: number; mapZ: number }) {
+    return { id: site.id, code: site.code, name: site.name, siteType: site.siteType, timezone: site.timezone, addressLine: site.addressLine, operationalStatus: site.operationalStatus, map: { x: site.mapX, z: site.mapZ } };
   }
 
   /** Site fill (DEC-13): vị trí pallet cho kho, ô đỗ cho bãi xe, dock riêng — không cộng gộp đơn vị (BR-31). */
@@ -79,17 +80,17 @@ export class SitesService {
     });
     const occ = await this.occupancy.activeByLocations(siteId);
     let palletPositionsUsed = 0, palletPositionsTotal = 0, slotsUsed = 0, slotsTotal = 0, docksOccupied = 0, docksTotal = 0;
-    for (const l of locations) {
-      const o = occ.get(l.id) ?? [];
-      if (l.locationType === 'STORAGE') {
-        if (!l.blockedAt) palletPositionsTotal += Number(l.capacityUnits);
-        palletPositionsUsed += o.filter((x) => x.kind === 'OCCUPIED').reduce((s, x) => s + x.unitsUsed, 0);
-      } else if (l.locationType === 'PARKING_SLOT') {
-        if (!l.blockedAt) slotsTotal += 1;
-        if (o.length > 0) slotsUsed += 1;
+    for (const location of locations) {
+      const occupancies = occ.get(location.id) ?? [];
+      if (location.locationType === 'STORAGE') {
+        if (!location.blockedAt) palletPositionsTotal += Number(location.capacityUnits);
+        palletPositionsUsed += occupancies.filter((occupancy) => occupancy.kind === 'OCCUPIED').reduce((sum, occupancy) => sum + occupancy.unitsUsed, 0);
+      } else if (location.locationType === 'PARKING_SLOT') {
+        if (!location.blockedAt) slotsTotal += 1;
+        if (occupancies.length > 0) slotsUsed += 1;
       } else {
-        if (!l.blockedAt) docksTotal += 1;
-        if (o.some((x) => x.kind === 'OCCUPIED')) docksOccupied += 1;
+        if (!location.blockedAt) docksTotal += 1;
+        if (occupancies.some((occupancy) => occupancy.kind === 'OCCUPIED')) docksOccupied += 1;
       }
     }
     const inbound = await this.prisma.truckVisit.count({ where: { siteId, status: 'SCHEDULED', etaAt: { lte: new Date(Date.now() + 2 * 3600_000) } } });
@@ -98,7 +99,7 @@ export class SitesService {
 
   async listZones(siteId: string) {
     const zones = await this.prisma.zone.findMany({ where: { siteId, deletedAt: null }, orderBy: { code: 'asc' } });
-    return zones.map((z) => ({ id: z.id, code: z.code, name: z.name, zoneType: z.zoneType }));
+    return zones.map((zone) => ({ id: zone.id, code: zone.code, name: zone.name, zoneType: zone.zoneType }));
   }
 
   async listLocations(siteId: string, filter: { zoneId?: string; type?: string; q?: string }): Promise<LocationDto[]> {
@@ -114,7 +115,7 @@ export class SitesService {
       orderBy: { code: 'asc' },
     });
     const occ = await this.occupancy.activeByLocations(siteId);
-    return locations.map((l) => toLocationDto(l, occ.get(l.id) ?? []));
+    return locations.map((location) => toLocationDto(location, occ.get(location.id) ?? []));
   }
 
   async getLocation(siteId: string, locationId: string): Promise<LocationDto> {
@@ -166,7 +167,7 @@ export class SitesService {
     if (!['DOCK', 'PARKING_SLOT', 'YARD_SLOT'].includes(loc.locationType)) return;
     const occ = (await this.occupancy.activeByLocations(siteId, [locationId], tx)).get(locationId) ?? [];
     const eff = effectiveStatus(loc, occ);
-    const current = occ.find((o) => o.kind === 'OCCUPIED') ?? occ[0];
+    const current = occ.find((occupancy) => occupancy.kind === 'OCCUPIED') ?? occ[0];
     await this.outbox.publish(tx, {
       siteId,
       type: loc.locationType === 'DOCK' ? 'dock.status_changed' : 'slot.status_changed',
@@ -219,19 +220,19 @@ export class SitesService {
       versionNo: layout.versionNo,
       modelUrl: null,
       bounds: { minX: layout.boundsMinX, minZ: layout.boundsMinZ, maxX: layout.boundsMaxX, maxZ: layout.boundsMaxZ },
-      objects: layout.objects.map((o) => ({
-        id: o.id,
-        targetType: o.targetType,
-        targetId: o.targetId,
-        meshRef: o.meshRef,
-        posX: o.posX,
-        posY: o.posY,
-        posZ: o.posZ,
-        rotY: o.rotY,
-        sizeX: o.sizeX,
-        sizeY: o.sizeY,
-        sizeZ: o.sizeZ,
-        props: (o.props as Record<string, unknown> | null) ?? null,
+      objects: layout.objects.map((layoutObject) => ({
+        id: layoutObject.id,
+        targetType: layoutObject.targetType,
+        targetId: layoutObject.targetId,
+        meshRef: layoutObject.meshRef,
+        posX: layoutObject.posX,
+        posY: layoutObject.posY,
+        posZ: layoutObject.posZ,
+        rotY: layoutObject.rotY,
+        sizeX: layoutObject.sizeX,
+        sizeY: layoutObject.sizeY,
+        sizeZ: layoutObject.sizeZ,
+        props: (layoutObject.props as Record<string, unknown> | null) ?? null,
       })),
     };
   }
@@ -239,14 +240,14 @@ export class SitesService {
   async settings(siteId: string, tx?: Tx): Promise<SiteSettings> {
     const rows = await (tx ?? this.prisma).siteSetting.findMany({ where: { siteId } });
     const merged: Record<string, unknown> = { ...SITE_SETTING_DEFAULTS };
-    for (const r of rows) if (isSettingKey(r.key)) merged[r.key] = r.value;
+    for (const row of rows) if (isSettingKey(row.key)) merged[row.key] = row.value;
     return merged as SiteSettings;
   }
 
   async putSetting(siteId: string, key: string, value: unknown) {
     if (!isSettingKey(key)) throw DomainError.notFound('Setting');
     const parsed = SITE_SETTING_SCHEMAS[key].safeParse(value);
-    if (!parsed.success) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, parsed.error.issues.map((i) => i.message).join('; '));
+    if (!parsed.success) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, parsed.error.issues.map((issue) => issue.message).join('; '));
     await this.tx.run(async (tx) => {
       await tx.siteSetting.upsert({
         where: { siteId_key: { siteId, key } },

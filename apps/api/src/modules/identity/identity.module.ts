@@ -7,6 +7,7 @@ import { AccessGuard } from './access.guard';
 import { AccessService } from './access.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { ReferenceDataService } from './reference-data.service';
 import { UsersController } from './users.controller';
 
 @Global()
@@ -25,7 +26,7 @@ import { UsersController } from './users.controller';
     }),
   ],
   controllers: [AuthController, UsersController],
-  providers: [AccessService, AuthService, { provide: APP_GUARD, useClass: AccessGuard }],
+  providers: [AccessService, AuthService, ReferenceDataService, { provide: APP_GUARD, useClass: AccessGuard }],
   exports: [AccessService, JwtModule],
 })
 export class IdentityModule {}

@@ -3,6 +3,7 @@ import { SitesModule } from '../sites/sites.module';
 import { InventoryController, SkusController } from './inventory.controller';
 import { InventoryEvents } from './inventory-events.service';
 import { InventoryQueryService } from './inventory-query.service';
+import { OpeningStockService } from './opening-stock.service';
 import { LedgerService } from './ledger.service';
 import { PalletsService } from './pallets.service';
 import { ReservationService } from './reservation.service';
@@ -13,7 +14,7 @@ import { StockService } from './stock.service';
 @Module({
   imports: [SitesModule],
   controllers: [SkusController, InventoryController],
-  providers: [LedgerService, InventoryEvents, PalletsService, StockService, ReservationService, StockCountService, InventoryQueryService],
+  providers: [LedgerService, InventoryEvents, OpeningStockService, PalletsService, StockService, ReservationService, StockCountService, InventoryQueryService],
   exports: [LedgerService, PalletsService, ReservationService, InventoryQueryService, InventoryEvents],
 })
 export class InventoryModule {}

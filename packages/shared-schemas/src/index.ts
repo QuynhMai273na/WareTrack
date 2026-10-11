@@ -11,3 +11,4 @@ export * from './inventory';
 export * from './flows';
 export * from './vehicles';
 export * from './notifications';
+export * from './admin';

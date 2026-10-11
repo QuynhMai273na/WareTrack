@@ -4,7 +4,7 @@ import { ExpectedVersion, IsoDateTime, PositionSource, ScanEvidence, Uuid } from
 /** VIN: 17 ký tự, không I/O/Q (FR-03.06, DEC-22). */
 export const Vin = z
   .string()
-  .transform((v) => v.trim().toUpperCase())
+  .transform((rawVin) => rawVin.trim().toUpperCase())
   .pipe(z.string().regex(/^[A-HJ-NPR-Z0-9]{17}$/, 'VIN must be 17 characters without I, O, Q'));
 
 const TRANSLIT: Record<string, number> = {
@@ -17,9 +17,9 @@ export function vinCheckDigit(vin: string): string {
   const sum = vin
     .toUpperCase()
     .split('')
-    .reduce((s, ch, i) => s + (/\d/.test(ch) ? Number(ch) : (TRANSLIT[ch] ?? 0)) * WEIGHTS[i], 0);
-  const r = sum % 11;
-  return r === 10 ? 'X' : String(r);
+    .reduce((weightedSum, character, position) => weightedSum + (/\d/.test(character) ? Number(character) : (TRANSLIT[character] ?? 0)) * WEIGHTS[position], 0);
+  const remainder = sum % 11;
+  return remainder === 10 ? 'X' : String(remainder);
 }
 
 export function vinCheckDigitValid(vin: string): boolean {

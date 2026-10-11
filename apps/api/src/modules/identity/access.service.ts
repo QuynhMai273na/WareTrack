@@ -36,11 +36,16 @@ export class AccessService {
 
   invalidateUser(userId: string) {
     this.users.delete(userId);
-    for (const l of this.userChangedListeners) l(userId);
+    for (const listener of this.userChangedListeners) listener(userId);
   }
 
   invalidateSites() {
     this.siteIds = null;
+  }
+
+  /** Ma trận role → permission vừa đổi (đồng bộ khi khởi động) → nạp lại ở lần kiểm tra quyền kế tiếp. */
+  invalidateRolePermissions() {
+    this.rolePerms = null;
   }
 
   async getUserAccess(userId: string): Promise<UserAccess | null> {
@@ -57,7 +62,7 @@ export class AccessService {
       fullName: user.fullName,
       status: user.status,
       permissionVersion: user.permissionVersion,
-      assignments: user.siteRoles.map((r) => ({ siteId: r.siteId, roleCode: r.role.code })),
+      assignments: user.siteRoles.map((siteRole) => ({ siteId: siteRole.siteId, roleCode: siteRole.role.code })),
       loadedAt: Date.now(),
     };
     this.users.set(userId, access);
@@ -67,7 +72,7 @@ export class AccessService {
   private async rolePermissionMap(): Promise<Map<string, Set<string>>> {
     if (this.rolePerms && Date.now() - this.rolePerms.loadedAt < ROLE_TTL_MS) return this.rolePerms.map;
     const roles = await this.prisma.role.findMany({ include: { permissions: { include: { permission: true } } } });
-    const map = new Map(roles.map((r) => [r.code, new Set(r.permissions.map((p) => p.permission.code))]));
+    const map = new Map(roles.map((role) => [role.code, new Set(role.permissions.map((rolePermission) => rolePermission.permission.code))]));
     this.rolePerms = { map, loadedAt: Date.now() };
     return map;
   }
@@ -75,19 +80,19 @@ export class AccessService {
   private async allSiteIds(): Promise<string[]> {
     if (this.siteIds && Date.now() - this.siteIds.loadedAt < ROLE_TTL_MS) return this.siteIds.ids;
     const sites = await this.prisma.site.findMany({ where: { deletedAt: null }, select: { id: true } });
-    this.siteIds = { ids: sites.map((s) => s.id), loadedAt: Date.now() };
+    this.siteIds = { ids: sites.map((site) => site.id), loadedAt: Date.now() };
     return this.siteIds.ids;
   }
 
   rolesAt(access: UserAccess, siteId: string | null): string[] {
-    return [...new Set(access.assignments.filter((a) => a.siteId === null || a.siteId === siteId).map((a) => a.roleCode))];
+    return [...new Set(access.assignments.filter((assignment) => assignment.siteId === null || assignment.siteId === siteId).map((assignment) => assignment.roleCode))];
   }
 
   async permissionsAt(access: UserAccess, siteId: string | null): Promise<Set<string>> {
     const map = await this.rolePermissionMap();
     const perms = new Set<string>();
     for (const role of this.rolesAt(access, siteId)) {
-      for (const p of map.get(role) ?? []) perms.add(p);
+      for (const permission of map.get(role) ?? []) perms.add(permission);
     }
     return perms;
   }
@@ -96,20 +101,20 @@ export class AccessService {
   async permissionsAnySite(access: UserAccess): Promise<Set<string>> {
     const map = await this.rolePermissionMap();
     const perms = new Set<string>();
-    for (const a of access.assignments) for (const p of map.get(a.roleCode) ?? []) perms.add(p);
+    for (const assignment of access.assignments) for (const permission of map.get(assignment.roleCode) ?? []) perms.add(permission);
     return perms;
   }
 
   /** Site user được phép truy cập (role tại site hoặc role cấp doanh nghiệp). */
   async allowedSiteIds(access: UserAccess): Promise<string[]> {
     let all = await this.allSiteIds();
-    const own = new Set(access.assignments.map((a) => a.siteId).filter((s): s is string => !!s));
+    const own = new Set(access.assignments.map((assignment) => assignment.siteId).filter((siteId): siteId is string => !!siteId));
     // Site mới tạo (hoặc DB vừa seed lại) chưa có trong cache → nạp lại một lần
     if ([...own].some((id) => !all.includes(id))) {
       this.invalidateSites();
       all = await this.allSiteIds();
     }
-    if (access.assignments.some((a) => a.siteId === null)) return all;
+    if (access.assignments.some((assignment) => assignment.siteId === null)) return all;
     return all.filter((id) => own.has(id));
   }
 

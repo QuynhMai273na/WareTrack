@@ -1,12 +1,13 @@
 import { AdaptiveDpr, Environment, Html, Lightformer, OrthographicCamera, PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame } from '@react-three/fiber';
 import type { PublishedLayout, SiteSnapshot } from '@waretrack/shared-schemas';
-import { memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { type DirectionalLight, NeutralToneMapping } from 'three';
+import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type DirectionalLight, type InstancedMesh, NeutralToneMapping, Object3D } from 'three';
 import { useScene } from '@/stores/scene';
 import { DynamicLayers } from './DynamicLayers';
 import { indexLayout, type LayoutIndex } from './layoutIndex';
-import { CameraRig, SelectionBracket } from './SceneControls';
+import { buildRoadNetwork, type RoadPiece, type SiteRoutes } from './network';
+import { type CameraFraming, CameraRig, SelectionBracket } from './SceneControls';
 import { StaticLayout } from './StaticLayout';
 
 export interface NetworkSite {
@@ -23,11 +24,11 @@ function SunLight({ center, half }: { center: { x: number; z: number }; half: nu
   const ref = useRef<DirectionalLight>(null);
   const { x, z } = center;
   useEffect(() => {
-    const l = ref.current;
-    if (!l) return;
-    l.target.position.set(x, 0, z);
-    l.target.updateMatrixWorld();
-    l.shadow.camera.updateProjectionMatrix();
+    const light = ref.current;
+    if (!light) return;
+    light.target.position.set(x, 0, z);
+    light.target.updateMatrixWorld();
+    light.shadow.camera.updateProjectionMatrix();
   }, [x, z, half]);
   return (
     <directionalLight
@@ -50,11 +51,73 @@ function SunLight({ center, half }: { center: { x: number; z: number }; half: nu
 }
 
 /** Một site trên bản đồ chung: layout tĩnh + lớp động (xe, pallet, xe nâng) dịch theo gốc tọa độ của site. */
-const SiteOnMap = memo(function SiteOnMap({ site, index }: { site: NetworkSite; index: LayoutIndex }) {
+const SiteOnMap = memo(function SiteOnMap({ site, index, routes, transferTargetFor }: { site: NetworkSite; index: LayoutIndex; routes?: SiteRoutes; transferTargetFor: (truckCode: string) => string | undefined }) {
   return (
     <group position={[site.offset.x, 0, site.offset.z]}>
       <StaticLayout layout={index} siteId={site.siteId} />
-      {site.snapshot ? <DynamicLayers snapshot={site.snapshot} layout={index} /> : null}
+      {site.snapshot ? <DynamicLayers snapshot={site.snapshot} layout={index} routes={routes} transferTargetFor={transferTargetFor} /> : null}
+    </group>
+  );
+});
+
+/** Một lớp hộp lặp lại (mặt đường / vạch / lề) vẽ bằng một InstancedMesh — vài draw call cho cả mạng lưới. */
+function InstancedBoxes({ boxes, color, height }: { boxes: Array<{ x: number; y: number; z: number; rotY: number; width: number; length: number }>; color: string; height: number }) {
+  const ref = useRef<InstancedMesh>(null);
+  useLayoutEffect(() => {
+    const mesh = ref.current;
+    if (!mesh) return;
+    const placement = new Object3D();
+    boxes.forEach((box, boxIndex) => {
+      placement.position.set(box.x, box.y, box.z);
+      placement.rotation.set(0, box.rotY, 0);
+      placement.scale.set(box.width, height, box.length);
+      placement.updateMatrix();
+      mesh.setMatrixAt(boxIndex, placement.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [boxes, height]);
+  if (!boxes.length) return null;
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, boxes.length]} receiveShadow>
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial color={color} />
+    </instancedMesh>
+  );
+}
+
+/**
+ * Đường vẽ thêm của mạng lưới: nối lối vào/ra của site tới đại lộ + nhánh đại lộ chạy ra khỏi bản đồ.
+ * Cùng kiểu với Road (mặt đường, vạch giữa đứt, vạch mép, vỉa hè) nhưng gộp instancing.
+ */
+const NetworkRoads = memo(function NetworkRoads({ pieces }: { pieces: RoadPiece[] }) {
+  const layers = useMemo(() => {
+    const surfaces: Array<{ x: number; y: number; z: number; rotY: number; width: number; length: number }> = [];
+    const dashes: typeof surfaces = [];
+    const edges: typeof surfaces = [];
+    const sidewalks: typeof surfaces = [];
+    for (const piece of pieces) {
+      const along = { x: Math.sin(piece.rotY), z: Math.cos(piece.rotY) };
+      const across = { x: Math.cos(piece.rotY), z: -Math.sin(piece.rotY) };
+      // Nhánh đại lộ nằm thấp hơn đại lộ một chút để chỗ chồng lên giao lộ không nhấp nháy
+      const sink = piece.avenue ? -0.012 : 0;
+      const at = (alongOffset: number, acrossOffset: number, y: number) => ({ x: piece.x + along.x * alongOffset + across.x * acrossOffset, y: y + sink, z: piece.z + along.z * alongOffset + across.z * acrossOffset });
+      surfaces.push({ ...at(0, 0, 0.02), rotY: piece.rotY, width: piece.width, length: piece.length });
+      const dashCount = Math.floor(piece.length / 9);
+      for (let dashIndex = 0; dashIndex < dashCount; dashIndex++) dashes.push({ ...at(-piece.length / 2 + 4.5 + dashIndex * 9, 0, 0.045), rotY: piece.rotY, width: 0.28, length: 3.4 });
+      for (const side of [1, -1]) {
+        edges.push({ ...at(0, side * (piece.width / 2 - 0.6), 0.045), rotY: piece.rotY, width: 0.18, length: piece.length });
+        sidewalks.push({ ...at(0, side * (piece.width / 2 + 0.9), 0.1), rotY: piece.rotY, width: 1.8, length: piece.length });
+      }
+    }
+    return { surfaces, dashes, edges, sidewalks };
+  }, [pieces]);
+  return (
+    <group>
+      <InstancedBoxes boxes={layers.surfaces} color="#d3d9f0" height={0.04} />
+      <InstancedBoxes boxes={layers.dashes} color="#ffffff" height={0.01} />
+      <InstancedBoxes boxes={layers.edges} color="#f4f6fd" height={0.01} />
+      <InstancedBoxes boxes={layers.sidewalks} color="#f3f5fc" height={0.2} />
     </group>
   );
 });
@@ -63,23 +126,23 @@ const SiteOnMap = memo(function SiteOnMap({ site, index }: { site: NetworkSite; 
 function SiteTags({ sites, indexes, currentSiteId, onPick }: { sites: NetworkSite[]; indexes: Map<string, LayoutIndex>; currentSiteId: string; onPick?: (code: string) => void }) {
   const [visible, setVisible] = useState(false);
   useFrame(({ camera }) => {
-    const v = (camera as { zoom: number }).zoom < 9;
-    if (v !== visible) setVisible(v);
+    const isZoomedOut = (camera as { zoom: number }).zoom < 9;
+    if (isZoomedOut !== visible) setVisible(isZoomedOut);
   });
   if (!visible) return null;
   return (
     <>
-      {sites.map((s) => {
-        const ix = indexes.get(s.siteId);
+      {sites.map((site) => {
+        const ix = indexes.get(site.siteId);
         if (!ix) return null;
         return (
-          <Html key={s.siteId} position={[s.offset.x + ix.center.x, 24, s.offset.z + ix.center.z]} center zIndexRange={[20, 0]}>
+          <Html key={site.siteId} position={[site.offset.x + ix.center.x, 24, site.offset.z + ix.center.z]} center zIndexRange={[20, 0]}>
             <button
-              onClick={() => onPick?.(s.code)}
-              className={`flex items-center gap-2 whitespace-nowrap rounded-xl border bg-white/95 py-1 pl-1 pr-3 text-sm font-semibold shadow-md transition hover:-translate-y-0.5 ${s.siteId === currentSiteId ? 'border-brand' : 'border-line'}`}
+              onClick={() => onPick?.(site.code)}
+              className={`flex items-center gap-2 whitespace-nowrap rounded-xl border bg-white/95 py-1 pl-1 pr-3 text-sm font-semibold shadow-md transition hover:-translate-y-0.5 ${site.siteId === currentSiteId ? 'border-brand' : 'border-line'}`}
             >
-              <span className="rounded-lg bg-brand px-1.5 py-1 text-[11px] font-bold text-white">{s.code}</span>
-              {s.name}
+              <span className="rounded-lg bg-brand px-1.5 py-1 text-[11px] font-bold text-white">{site.code}</span>
+              {site.name}
             </button>
           </Html>
         );
@@ -93,19 +156,42 @@ function SiteTags({ sites, indexes, currentSiteId, onPick }: { sites: NetworkSit
  * đổi site thì camera bay tới (video: "Network overview — zoom out to all sites").
  * frameloop="demand": chỉ render khi có thay đổi/animation (mục 18.11).
  */
-export function SiteScene({ sites, currentSiteId, onPickSite, onLowFps }: { sites: NetworkSite[]; currentSiteId: string; onPickSite?: (code: string) => void; onLowFps?: () => void }) {
-  const select = useScene((s) => s.select);
+export function SiteScene({
+  sites,
+  currentSiteId,
+  onPickSite,
+  onLowFps,
+  framing = 'operations',
+}: {
+  sites: NetworkSite[];
+  currentSiteId: string;
+  onPickSite?: (code: string) => void;
+  onLowFps?: () => void;
+  framing?: CameraFraming;
+}) {
+  const select = useScene((state) => state.select);
   const [dpr, setDpr] = useState(1.5);
-  const layoutsKey = sites.map((s) => `${s.siteId}:${s.layout.versionId}`).join('|');
+  const layoutsKey = sites.map((site) => `${site.siteId}:${site.layout.versionId}`).join('|');
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const indexes = useMemo(() => new Map(sites.map((s) => [s.siteId, indexLayout(s.layout)])), [layoutsKey]);
-  const current = sites.find((s) => s.siteId === currentSiteId) ?? sites[0];
+  const indexes = useMemo(() => new Map(sites.map((site) => [site.siteId, indexLayout(site.layout)])), [layoutsKey]);
+  const current = sites.find((site) => site.siteId === currentSiteId) ?? sites[0];
   const currentIndex = current ? indexes.get(current.siteId) : undefined;
-  const network = useMemo(() => sites.map((s) => ({ layout: indexes.get(s.siteId)!, offset: s.offset })).filter((n) => n.layout), [sites, indexes]);
+  const network = useMemo(() => sites.map((site) => ({ layout: indexes.get(site.siteId)!, offset: site.offset })).filter((networkEntry) => networkEntry.layout), [sites, indexes]);
+  const offsetsKey = sites.map((site) => `${site.siteId}:${site.offset.x},${site.offset.z}`).join('|');
+  // Mạng đường chung: chỉ dựng lại khi layout hoặc vị trí site trên bản đồ đổi
+  const roadNetwork = useMemo(
+    () => buildRoadNetwork(sites.filter((site) => indexes.has(site.siteId)).map((site) => ({ siteId: site.siteId, offset: site.offset, layout: indexes.get(site.siteId)! }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [indexes, offsetsKey],
+  );
+  // Xe rời site A mà đang có lịch tới site B (cùng mã xe) → chạy thẳng sang B. Đọc snapshot qua ref để hàm ổn định.
+  const scheduledVisits = useRef(new Map<string, string>());
+  scheduledVisits.current = new Map(sites.flatMap((site) => (site.snapshot?.trucks ?? []).filter((truck) => truck.status === 'SCHEDULED').map((truck) => [truck.truckCode, site.siteId] as [string, string])));
+  const transferTargetFor = useCallback((truckCode: string) => scheduledVisits.current.get(truckCode), []);
   if (!current || !currentIndex) return null;
-  const b = currentIndex.bounds;
+  const bounds = currentIndex.bounds;
   const center = { x: current.offset.x + currentIndex.center.x, z: current.offset.z + currentIndex.center.z };
-  const half = Math.max(b.maxX - b.minX, b.maxZ - b.minZ) / 2 + 30;
+  const half = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ) / 2 + 30;
   return (
     <Canvas
       shadows="soft"
@@ -131,14 +217,15 @@ export function SiteScene({ sites, currentSiteId, onPickSite, onLowFps }: { site
           <planeGeometry args={[6000, 6000]} />
           <meshStandardMaterial color="#eceef8" roughness={1} />
         </mesh>
-        {sites.map((s) => {
-          const index = indexes.get(s.siteId);
-          return index ? <SiteOnMap key={s.siteId} site={s} index={index} /> : null;
+        <NetworkRoads pieces={roadNetwork.extraRoads} />
+        {sites.map((site) => {
+          const index = indexes.get(site.siteId);
+          return index ? <SiteOnMap key={site.siteId} site={site} index={index} routes={roadNetwork.routes.get(site.siteId)} transferTargetFor={transferTargetFor} /> : null;
         })}
         <SelectionBracket />
-        <SiteTags sites={sites} indexes={indexes} currentSiteId={currentSiteId} onPick={onPickSite} />
+        {sites.length > 1 ? <SiteTags sites={sites} indexes={indexes} currentSiteId={currentSiteId} onPick={onPickSite} /> : null}
       </Suspense>
-      <CameraRig layout={currentIndex} offset={current.offset} network={network} />
+      <CameraRig layout={currentIndex} offset={current.offset} network={network} framing={framing} />
     </Canvas>
   );
 }

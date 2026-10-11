@@ -16,11 +16,11 @@ import { useAuth } from '@/stores/auth';
 import { useSiteContext } from '../shell/SiteShell';
 
 const TONE: Record<string, BadgeTone> = { CONFIRMED: 'info', RECEIVING: 'info', RECEIVED: 'warn', CLOSED: 'ok', CANCELLED: 'neutral' };
-const qty = (v: string) => Number(v).toLocaleString();
+const qty = (amount: string) => Number(amount).toLocaleString();
 
 function CreateInboundDialog({ siteId, onClose, onCreated }: { siteId: string; onClose: () => void; onCreated: (id: string) => void }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { data: skus } = useSkus();
   const { data: suppliers } = usePartners('SUPPLIER');
   const { data: visits } = useVisits(siteId, 'SCHEDULED,AT_GATE,WAITING,DOCK_ASSIGNED,AT_DOCK,HANDLING');
@@ -28,7 +28,7 @@ function CreateInboundDialog({ siteId, onClose, onCreated }: { siteId: string; o
   const [visitId, setVisitId] = useState('');
   const [lines, setLines] = useState([{ skuId: '', expectedQty: '', expectedHuCount: '1', expectedLotNumber: '' }]);
   const [key] = useState(() => crypto.randomUUID());
-  const m = useMutation({
+  const createOrder = useMutation({
     mutationFn: () =>
       api<InboundOrderDetail>(`/sites/${siteId}/inbound-orders`, {
         method: 'POST',
@@ -37,73 +37,73 @@ function CreateInboundDialog({ siteId, onClose, onCreated }: { siteId: string; o
           ...(supplierId ? { supplierId } : {}),
           ...(visitId ? { truckVisitId: visitId } : {}),
           lines: lines
-            .filter((l) => l.skuId && l.expectedQty)
-            .map((l) => ({ skuId: l.skuId, expectedQty: l.expectedQty, expectedHuCount: Number(l.expectedHuCount) || 0, ...(l.expectedLotNumber ? { expectedLotNumber: l.expectedLotNumber } : {}) })),
+            .filter((line) => line.skuId && line.expectedQty)
+            .map((line) => ({ skuId: line.skuId, expectedQty: line.expectedQty, expectedHuCount: Number(line.expectedHuCount) || 0, ...(line.expectedLotNumber ? { expectedLotNumber: line.expectedLotNumber } : {}) })),
         },
       }),
-    onSuccess: (o) => {
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'shipments'] });
-      onCreated(o.id);
+    onSuccess: (order) => {
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'shipments'] });
+      onCreated(order.id);
       onClose();
     },
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={t('flows.newInbound')} className="w-[min(92vw,620px)]">
-      <form className="space-y-3" onSubmit={(e) => (e.preventDefault(), m.mutate())}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={t('flows.newInbound')} className="w-[min(92vw,620px)]">
+      <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), createOrder.mutate())}>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>{t('inspector.supplier')}</Label>
-            <Select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+            <Select value={supplierId} onChange={(event) => setSupplierId(event.target.value)}>
               <option value="">—</option>
-              {suppliers?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+              {suppliers?.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
                 </option>
               ))}
             </Select>
           </div>
           <div>
             <Label>{t('flows.truckVisit')}</Label>
-            <Select value={visitId} onChange={(e) => setVisitId(e.target.value)}>
+            <Select value={visitId} onChange={(event) => setVisitId(event.target.value)}>
               <option value="">—</option>
               {visits
-                ?.filter((v) => v.direction !== 'OUTBOUND')
-                .map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.truck.code} · {t(`status.${v.status}`)}
+                ?.filter((visit) => visit.direction !== 'OUTBOUND')
+                .map((visit) => (
+                  <option key={visit.id} value={visit.id}>
+                    {visit.truck.code} · {t(`status.${visit.status}`)}
                   </option>
                 ))}
             </Select>
           </div>
         </div>
         <Label>{t('flows.lines')}</Label>
-        {lines.map((l, i) => (
-          <div key={i} className="flex gap-2">
-            <Select value={l.skuId} onChange={(e) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, skuId: e.target.value } : x)))}>
+        {lines.map((line, lineIndex) => (
+          <div key={lineIndex} className="flex gap-2">
+            <Select value={line.skuId} onChange={(event) => setLines((prevLines) => prevLines.map((entry, entryIndex) => (entryIndex === lineIndex ? { ...entry, skuId: event.target.value } : entry)))}>
               <option value="">SKU…</option>
-              {skus?.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
+              {skus?.map((sku) => (
+                <option key={sku.id} value={sku.id}>
+                  {sku.name}
                 </option>
               ))}
             </Select>
-            <Input className="w-24" placeholder="Qty" value={l.expectedQty} onChange={(e) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, expectedQty: e.target.value } : x)))} />
-            <Input className="w-20" placeholder="Pal." value={l.expectedHuCount} onChange={(e) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, expectedHuCount: e.target.value } : x)))} />
-            <Input className="w-28" placeholder="Lot" value={l.expectedLotNumber} onChange={(e) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, expectedLotNumber: e.target.value } : x)))} />
-            <Button type="button" variant="ghost" size="icon" onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}>
+            <Input className="w-24" placeholder="Qty" value={line.expectedQty} onChange={(event) => setLines((prevLines) => prevLines.map((entry, entryIndex) => (entryIndex === lineIndex ? { ...entry, expectedQty: event.target.value } : entry)))} />
+            <Input className="w-20" placeholder="Pal." value={line.expectedHuCount} onChange={(event) => setLines((prevLines) => prevLines.map((entry, entryIndex) => (entryIndex === lineIndex ? { ...entry, expectedHuCount: event.target.value } : entry)))} />
+            <Input className="w-28" placeholder="Lot" value={line.expectedLotNumber} onChange={(event) => setLines((prevLines) => prevLines.map((entry, entryIndex) => (entryIndex === lineIndex ? { ...entry, expectedLotNumber: event.target.value } : entry)))} />
+            <Button type="button" variant="ghost" size="icon" onClick={() => setLines((prevLines) => prevLines.filter((_, entryIndex) => entryIndex !== lineIndex))}>
               <Trash2 size={14} />
             </Button>
           </div>
         ))}
-        <Button type="button" variant="outline" size="sm" onClick={() => setLines((ls) => [...ls, { skuId: '', expectedQty: '', expectedHuCount: '1', expectedLotNumber: '' }])}>
+        <Button type="button" variant="outline" size="sm" onClick={() => setLines((prevLines) => [...prevLines, { skuId: '', expectedQty: '', expectedHuCount: '1', expectedLotNumber: '' }])}>
           <Plus size={14} /> {t('flows.addLine')}
         </Button>
-        {m.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(m.error)}</p> : null}
+        {createOrder.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(createOrder.error)}</p> : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={m.isPending}>
+          <Button type="submit" disabled={createOrder.isPending}>
             {t('common.confirm')}
           </Button>
         </div>
@@ -115,11 +115,11 @@ function CreateInboundDialog({ siteId, onClose, onCreated }: { siteId: string; o
 /** Màn hình nhận hàng (UC-08): mỗi lần quét = một pallet; tiến độ x/y; sai lệch → exception. */
 function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: InboundOrderDetail; timeZone: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const qc = useQueryClient();
+  const can = useAuth((state) => state.can);
+  const queryClient = useQueryClient();
   const { data: receipt } = useReceipt(siteId, order.receipt?.id);
   const [skuId, setSkuId] = useState(order.lines[0]?.sku.id ?? '');
-  const line = order.lines.find((l) => l.sku.id === skuId);
+  const line = order.lines.find((orderLine) => orderLine.sku.id === skuId);
   const [quantity, setQuantity] = useState('');
   const [lot, setLot] = useState(order.lines[0]?.expectedLotNumber ?? '');
   const [expires, setExpires] = useState('');
@@ -127,7 +127,7 @@ function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: In
   const [damaged, setDamaged] = useState(false);
   const [shortReason, setShortReason] = useState('');
   const [error, setError] = useState<unknown>(null);
-  const refresh = () => void qc.invalidateQueries({ queryKey: ['site', siteId] });
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: ['site', siteId] });
   const run = useMutation({
     mutationFn: ({ path, body }: { path: string; body: unknown }) => api(`/sites/${siteId}${path}`, { method: 'POST', body }),
     onSuccess: () => {
@@ -166,27 +166,27 @@ function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: In
       {receipt.status === 'IN_PROGRESS' && can(siteId, 'inbound.receive') ? (
         <form
           className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-6"
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(event) => {
+            event.preventDefault();
             run.mutate({
               path: `/receipts/${receipt.id}/lines`,
               body: { skuId, quantity, ...(lot ? { lotNumber: lot } : {}), ...(expires ? { expiresOn: expires } : {}), ...(huCode ? { huCode } : {}), condition: damaged ? 'DAMAGED' : 'GOOD' },
             });
           }}
         >
-          <Select className="col-span-2" value={skuId} onChange={(e) => setSkuId(e.target.value)}>
-            {order.lines.map((l) => (
-              <option key={l.id} value={l.sku.id}>
-                {l.sku.name}
+          <Select className="col-span-2" value={skuId} onChange={(event) => setSkuId(event.target.value)}>
+            {order.lines.map((orderLine) => (
+              <option key={orderLine.id} value={orderLine.sku.id}>
+                {orderLine.sku.name}
               </option>
             ))}
           </Select>
-          <Input placeholder="Qty" value={quantity} onChange={(e) => setQuantity(e.target.value)} required />
-          {line?.sku.lotTracked ? <Input placeholder="Lot" value={lot} onChange={(e) => setLot(e.target.value)} required /> : <Input placeholder="PAL-… (opt.)" value={huCode} onChange={(e) => setHuCode(e.target.value)} />}
-          {line?.sku.lotTracked ? <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} title="Expiry" /> : <span />}
+          <Input placeholder="Qty" value={quantity} onChange={(event) => setQuantity(event.target.value)} required />
+          {line?.sku.lotTracked ? <Input placeholder="Lot" value={lot} onChange={(event) => setLot(event.target.value)} required /> : <Input placeholder="PAL-… (opt.)" value={huCode} onChange={(event) => setHuCode(event.target.value)} />}
+          {line?.sku.lotTracked ? <Input type="date" value={expires} onChange={(event) => setExpires(event.target.value)} title="Expiry" /> : <span />}
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1 text-xs">
-              <input type="checkbox" checked={damaged} onChange={(e) => setDamaged(e.target.checked)} /> {t('flows.damaged')}
+              <input type="checkbox" checked={damaged} onChange={(event) => setDamaged(event.target.checked)} /> {t('flows.damaged')}
             </label>
             <Button type="submit" size="sm" disabled={run.isPending}>
               {t('flows.scan')}
@@ -197,19 +197,19 @@ function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: In
       {error ? <p className="mb-3 rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(error)}</p> : null}
       <table className="mb-3 w-full text-sm">
         <tbody>
-          {receipt.lines.map((l) => (
-            <tr key={l.id} className={cn('border-b border-line/60', l.voided && 'text-muted line-through')}>
-              <td className="py-1.5 font-medium">{l.handlingUnit.code}</td>
-              <td>{l.sku.name}</td>
-              <td className="text-xs">{l.lotNumber ?? ''}</td>
-              <td className="tabular text-right">{qty(l.quantity)}</td>
+          {receipt.lines.map((receiptLine) => (
+            <tr key={receiptLine.id} className={cn('border-b border-line/60', receiptLine.voided && 'text-muted line-through')}>
+              <td className="py-1.5 font-medium">{receiptLine.handlingUnit.code}</td>
+              <td>{receiptLine.sku.name}</td>
+              <td className="text-xs">{receiptLine.lotNumber ?? ''}</td>
+              <td className="tabular text-right">{qty(receiptLine.quantity)}</td>
               <td className="pl-3">
-                <Badge tone={l.stockStatus === 'AVAILABLE' ? 'ok' : l.stockStatus === 'QC_HOLD' ? 'warn' : 'bad'}>{l.stockStatus}</Badge>
+                <Badge tone={receiptLine.stockStatus === 'AVAILABLE' ? 'ok' : receiptLine.stockStatus === 'QC_HOLD' ? 'warn' : 'bad'}>{receiptLine.stockStatus}</Badge>
               </td>
-              <td className="text-xs text-muted">{formatTime(l.createdAt, timeZone)}</td>
+              <td className="text-xs text-muted">{formatTime(receiptLine.createdAt, timeZone)}</td>
               <td className="text-right">
-                {!l.voided && receipt.status === 'IN_PROGRESS' ? (
-                  <Button size="iconSm" variant="ghost" onClick={() => run.mutate({ path: `/receipts/${receipt.id}/lines/${l.id}/void`, body: { reason: window.prompt(t('yard.reason')) ?? 'Scanned by mistake' } })}>
+                {!receiptLine.voided && receipt.status === 'IN_PROGRESS' ? (
+                  <Button size="iconSm" variant="ghost" onClick={() => run.mutate({ path: `/receipts/${receipt.id}/lines/${receiptLine.id}/void`, body: { reason: window.prompt(t('yard.reason')) ?? 'Scanned by mistake' } })}>
                     <XCircle size={14} />
                   </Button>
                 ) : null}
@@ -220,7 +220,7 @@ function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: In
       </table>
       {receipt.status === 'IN_PROGRESS' ? (
         <div className="flex flex-wrap items-center gap-2">
-          {receipt.progress.receivedHu < receipt.progress.expectedHu ? <Input className="w-72" placeholder={t('flows.shortReason')} value={shortReason} onChange={(e) => setShortReason(e.target.value)} /> : null}
+          {receipt.progress.receivedHu < receipt.progress.expectedHu ? <Input className="w-72" placeholder={t('flows.shortReason')} value={shortReason} onChange={(event) => setShortReason(event.target.value)} /> : null}
           <Button onClick={() => run.mutate({ path: `/receipts/${receipt.id}/complete`, body: shortReason ? { closeShortReason: shortReason } : {} })}>
             <CheckCircle2 size={14} /> {t('flows.completeReceipt')}
           </Button>
@@ -228,11 +228,11 @@ function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: In
       ) : null}
       {receipt.discrepancies.length > 0 ? (
         <div className="mt-3 space-y-1">
-          {receipt.discrepancies.map((d) => (
-            <div key={d.id} className="flex items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm">
-              <span className="font-semibold">{d.type}</span> {d.sku} {d.qtyDelta} <Badge tone="warn">{d.status}</Badge>
-              {d.status === 'PENDING_APPROVAL' && can(siteId, 'inbound.discrepancy.approve') ? (
-                <Button size="sm" className="ml-auto" onClick={() => run.mutate({ path: `/receipts/${receipt.id}/discrepancies/${d.id}/approve`, body: {} })}>
+          {receipt.discrepancies.map((discrepancy) => (
+            <div key={discrepancy.id} className="flex items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm">
+              <span className="font-semibold">{discrepancy.type}</span> {discrepancy.sku} {discrepancy.qtyDelta} <Badge tone="warn">{discrepancy.status}</Badge>
+              {discrepancy.status === 'PENDING_APPROVAL' && can(siteId, 'inbound.discrepancy.approve') ? (
+                <Button size="sm" className="ml-auto" onClick={() => run.mutate({ path: `/receipts/${receipt.id}/discrepancies/${discrepancy.id}/approve`, body: {} })}>
                   {t('inventory.approve')}
                 </Button>
               ) : null}
@@ -246,31 +246,31 @@ function ReceivingPanel({ siteId, order, timeZone }: { siteId: string; order: In
 
 function QcQueue({ siteId }: { siteId: string }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { data } = useQuery({ queryKey: ['site', siteId, 'inventory', 'qc'], queryFn: () => api<Array<{ balanceId: string; handlingUnit: { id: string; code: string }; sku: { code: string; name: string }; location: string; quantity: string }>>(`/sites/${siteId}/qc-queue`) });
   const run = useMutation({
     mutationFn: (body: unknown) => api(`/sites/${siteId}/qc-inspections`, { method: 'POST', body }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['site', siteId] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['site', siteId] }),
     onError: (err) => window.alert(describeError(err)),
   });
   return (
     <div className="space-y-2">
       {data?.length === 0 ? <p className="text-sm text-muted">{t('flows.qcEmpty')}</p> : null}
-      {data?.map((q) => (
-        <div key={q.balanceId} className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3 text-sm">
+      {data?.map((qcBalance) => (
+        <div key={qcBalance.balanceId} className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3 text-sm">
           <ShieldCheck size={18} className="text-warn" />
           <div className="flex-1">
             <div className="font-semibold">
-              {q.handlingUnit.code} · {q.sku.name}
+              {qcBalance.handlingUnit.code} · {qcBalance.sku.name}
             </div>
             <div className="text-xs text-muted">
-              {q.location} · {qty(q.quantity)}
+              {qcBalance.location} · {qty(qcBalance.quantity)}
             </div>
           </div>
-          <Button size="sm" onClick={() => run.mutate({ handlingUnitId: q.handlingUnit.id, result: 'PASS' })}>
+          <Button size="sm" onClick={() => run.mutate({ handlingUnitId: qcBalance.handlingUnit.id, result: 'PASS' })}>
             PASS
           </Button>
-          <Button size="sm" variant="danger" onClick={() => run.mutate({ handlingUnitId: q.handlingUnit.id, result: 'FAIL', failStatus: 'QUARANTINE', note: window.prompt('Note') ?? undefined })}>
+          <Button size="sm" variant="danger" onClick={() => run.mutate({ handlingUnitId: qcBalance.handlingUnit.id, result: 'FAIL', failStatus: 'QUARANTINE', note: window.prompt('Note') ?? undefined })}>
             FAIL
           </Button>
         </div>
@@ -283,11 +283,11 @@ function QcQueue({ siteId }: { siteId: string }) {
 export function InboundPage() {
   const { t } = useTranslation();
   const { siteId, timeZone } = useSiteContext();
-  const can = useAuth((s) => s.can);
+  const can = useAuth((state) => state.can);
   const [params, setParams] = useSearchParams();
   const { data: orders } = useInboundOrders(siteId);
   const [create, setCreate] = useState(false);
-  const selected = orders?.find((o) => o.id === params.get('order')) ?? orders?.[0];
+  const selected = orders?.find((order) => order.id === params.get('order')) ?? orders?.[0];
   return (
     <div className="h-full overflow-auto px-4 pb-6 pt-[76px]">
       <Tabs defaultValue="orders" className="mx-auto max-w-7xl">
@@ -307,14 +307,14 @@ export function InboundPage() {
                 </Button>
               ) : null}
               <div className="space-y-1.5">
-                {orders?.map((o) => (
-                  <button key={o.id} onClick={() => setParams({ order: o.id })} className={cn('w-full rounded-xl border p-3 text-left text-sm', selected?.id === o.id ? 'border-brand bg-brand-soft/50' : 'border-line')}>
+                {orders?.map((order) => (
+                  <button key={order.id} onClick={() => setParams({ order: order.id })} className={cn('w-full rounded-xl border p-3 text-left text-sm', selected?.id === order.id ? 'border-brand bg-brand-soft/50' : 'border-line')}>
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold">{o.code}</span>
-                      <Badge tone={TONE[o.status] ?? 'neutral'}>{o.status}</Badge>
+                      <span className="font-semibold">{order.code}</span>
+                      <Badge tone={TONE[order.status] ?? 'neutral'}>{order.status}</Badge>
                     </div>
                     <div className="text-xs text-muted">
-                      {o.supplier?.name ?? '—'} {o.shipment ? `· ${o.shipment.code} ${t(`shipmentStatus.${o.shipment.status}`)}` : ''}
+                      {order.supplier?.name ?? '—'} {order.shipment ? `· ${order.shipment.code} ${t(`shipmentStatus.${order.shipment.status}`)}` : ''}
                     </div>
                   </button>
                 ))}
@@ -338,16 +338,16 @@ export function InboundPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {selected.lines.map((l) => (
-                      <tr key={l.id} className="border-b border-line/60">
+                    {selected.lines.map((orderLine) => (
+                      <tr key={orderLine.id} className="border-b border-line/60">
                         <td className="py-2">
-                          {l.sku.name} {l.sku.qcRequired ? <Badge tone="warn">QC</Badge> : null}
+                          {orderLine.sku.name} {orderLine.sku.qcRequired ? <Badge tone="warn">QC</Badge> : null}
                         </td>
-                        <td className="text-xs">{l.expectedLotNumber ?? '—'}</td>
+                        <td className="text-xs">{orderLine.expectedLotNumber ?? '—'}</td>
                         <td className="tabular text-right">
-                          {qty(l.expectedQty)} {l.expectedHuCount ? <span className="text-xs text-muted">({l.expectedHuCount} pal.)</span> : null}
+                          {qty(orderLine.expectedQty)} {orderLine.expectedHuCount ? <span className="text-xs text-muted">({orderLine.expectedHuCount} pal.)</span> : null}
                         </td>
-                        <td className={cn('tabular text-right font-semibold', Number(l.receivedQty) > Number(l.expectedQty) && 'text-warn')}>{qty(l.receivedQty)}</td>
+                        <td className={cn('tabular text-right font-semibold', Number(orderLine.receivedQty) > Number(orderLine.expectedQty) && 'text-warn')}>{qty(orderLine.receivedQty)}</td>
                       </tr>
                     ))}
                   </tbody>

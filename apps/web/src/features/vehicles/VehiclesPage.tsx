@@ -30,22 +30,22 @@ export const STAY_TONE: Record<string, BadgeTone> = {
 const CONDITION_TONE: Record<string, BadgeTone> = { OK: 'ok', MINOR_DAMAGE: 'warn', MAJOR_DAMAGE: 'bad', NEEDS_SERVICE: 'warn' };
 const FILTERS = ['all', 'incoming', 'stored', 'hold', 'release'] as const;
 type Filter = (typeof FILTERS)[number];
-const matchFilter = (v: VehicleStayDto, f: Filter) =>
-  f === 'all' ||
-  (f === 'incoming' && ['EXPECTED', 'RECEIVED', 'INSPECTED', 'ALLOCATED'].includes(v.status)) ||
-  (f === 'stored' && v.status === 'STORED') ||
-  (f === 'hold' && v.holdFlag) ||
-  (f === 'release' && ['RELEASE_REQUESTED', 'RELEASED'].includes(v.status));
+const matchFilter = (stay: VehicleStayDto, filterKey: Filter) =>
+  filterKey === 'all' ||
+  (filterKey === 'incoming' && ['EXPECTED', 'RECEIVED', 'INSPECTED', 'ALLOCATED'].includes(stay.status)) ||
+  (filterKey === 'stored' && stay.status === 'STORED') ||
+  (filterKey === 'hold' && stay.holdFlag) ||
+  (filterKey === 'release' && ['RELEASE_REQUESTED', 'RELEASED'].includes(stay.status));
 
 type Settings = { vehicleInspectionChecklist: Array<{ key: string; vi: string; en: string; required: boolean }> };
 
 function useRun(siteId: string, onDone?: () => void) {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ path, body }: { path: string; body?: unknown }) => api<VehicleStayDto>(`/sites/${siteId}${path}`, { method: 'POST', body: body ?? {} }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'vehicles'] });
-      void qc.invalidateQueries({ queryKey: ['vehicle-history'] });
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'vehicles'] });
+      void queryClient.invalidateQueries({ queryKey: ['vehicle-history'] });
       onDone?.();
     },
   });
@@ -58,8 +58,8 @@ function ErrorNote({ error }: { error: unknown }) {
 function FormDialog({ title, onClose, onSubmit, pending, error, children, submitLabel }: { title: string; onClose: () => void; onSubmit: () => void; pending: boolean; error: unknown; children: ReactNode; submitLabel?: string }) {
   const { t } = useTranslation();
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={title} className="w-[min(92vw,520px)]">
-      <form className="space-y-3" onSubmit={(e) => (e.preventDefault(), onSubmit())}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={title} className="w-[min(92vw,520px)]">
+      <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), onSubmit())}>
         {children}
         <ErrorNote error={error} />
         <div className="flex justify-end gap-2">
@@ -78,11 +78,11 @@ function FormDialog({ title, onClose, onSubmit, pending, error, children, submit
 /** UC-04 bước 1: khai báo xe sắp nhận theo VIN (DEC-22: sai check digit → hỏi xác nhận). */
 function CreateStayDialog({ siteId, onClose, onCreated }: { siteId: string; onClose: () => void; onCreated: (id: string) => void }) {
   const { t } = useTranslation();
-  const [f, setF] = useState({ vin: '', make: '', model: '', modelYear: '', color: '', plateNumber: '' });
+  const [form, setForm] = useState({ vin: '', make: '', model: '', modelYear: '', color: '', plateNumber: '' });
   const [confirmCheck, setConfirmCheck] = useState(false);
   const run = useRun(siteId);
   const needsConfirm = run.error instanceof ApiError && run.error.code === 'VIN_CHECK_DIGIT_CONFIRM_REQUIRED';
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const set = (field: keyof typeof form) => (event: { target: { value: string } }) => setForm((previous) => ({ ...previous, [field]: event.target.value }));
   return (
     <FormDialog
       title={t('vehicles.newStay')}
@@ -94,49 +94,49 @@ function CreateStayDialog({ siteId, onClose, onCreated }: { siteId: string; onCl
           {
             path: '/vehicle-stays',
             body: {
-              vin: f.vin,
-              ...(f.make ? { make: f.make } : {}),
-              ...(f.model ? { model: f.model } : {}),
-              ...(f.modelYear ? { modelYear: Number(f.modelYear) } : {}),
-              ...(f.color ? { color: f.color } : {}),
-              ...(f.plateNumber ? { plateNumber: f.plateNumber } : {}),
+              vin: form.vin,
+              ...(form.make ? { make: form.make } : {}),
+              ...(form.model ? { model: form.model } : {}),
+              ...(form.modelYear ? { modelYear: Number(form.modelYear) } : {}),
+              ...(form.color ? { color: form.color } : {}),
+              ...(form.plateNumber ? { plateNumber: form.plateNumber } : {}),
               ...(confirmCheck ? { acceptCheckDigit: true } : {}),
             },
           },
-          { onSuccess: (s) => (onCreated(s.id), onClose()) },
+          { onSuccess: (createdStay) => (onCreated(createdStay.id), onClose()) },
         )
       }
     >
       <div>
         <Label>VIN</Label>
-        <Input value={f.vin} onChange={set('vin')} maxLength={17} className="font-mono uppercase" placeholder="17 characters" required />
+        <Input value={form.vin} onChange={set('vin')} maxLength={17} className="font-mono uppercase" placeholder="17 characters" required />
       </div>
       {needsConfirm ? (
         <label className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
-          <input type="checkbox" className="mt-1" checked={confirmCheck} onChange={(e) => setConfirmCheck(e.target.checked)} />
+          <input type="checkbox" className="mt-1" checked={confirmCheck} onChange={(event) => setConfirmCheck(event.target.checked)} />
           {t('vehicles.checkDigitWarn')}
         </label>
       ) : null}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>{t('vehicles.make')}</Label>
-          <Input value={f.make} onChange={set('make')} />
+          <Input value={form.make} onChange={set('make')} />
         </div>
         <div>
           <Label>{t('vehicles.model')}</Label>
-          <Input value={f.model} onChange={set('model')} />
+          <Input value={form.model} onChange={set('model')} />
         </div>
         <div>
           <Label>{t('vehicles.year')}</Label>
-          <Input value={f.modelYear} onChange={set('modelYear')} inputMode="numeric" />
+          <Input value={form.modelYear} onChange={set('modelYear')} inputMode="numeric" />
         </div>
         <div>
           <Label>{t('vehicles.color')}</Label>
-          <Input value={f.color} onChange={set('color')} />
+          <Input value={form.color} onChange={set('color')} />
         </div>
         <div className="col-span-2">
           <Label>{t('vehicles.plate')}</Label>
-          <Input value={f.plateNumber} onChange={set('plateNumber')} />
+          <Input value={form.plateNumber} onChange={set('plateNumber')} />
         </div>
       </div>
     </FormDialog>
@@ -170,15 +170,15 @@ function ReceiveDialog({ siteId, stay, onClose }: { siteId: string; stay: Vehicl
       <div className="grid grid-cols-3 gap-3">
         <div>
           <Label>{t('vehicles.odometer')}</Label>
-          <Input value={odo} onChange={(e) => setOdo(e.target.value)} inputMode="numeric" />
+          <Input value={odo} onChange={(event) => setOdo(event.target.value)} inputMode="numeric" />
         </div>
         <div>
           <Label>{t('vehicles.fuel')}</Label>
-          <Input value={fuel} onChange={(e) => setFuel(e.target.value)} inputMode="numeric" />
+          <Input value={fuel} onChange={(event) => setFuel(event.target.value)} inputMode="numeric" />
         </div>
         <div>
           <Label>{t('vehicles.keyTag')}</Label>
-          <Input value={keyTag} onChange={(e) => setKeyTag(e.target.value)} />
+          <Input value={keyTag} onChange={(event) => setKeyTag(event.target.value)} />
         </div>
       </div>
     </FormDialog>
@@ -204,33 +204,33 @@ function InspectDialog({ siteId, stay, onClose }: { siteId: string; stay: Vehicl
       onSubmit={() =>
         run.mutate({
           path: `/vehicle-stays/${stay.id}/inspections`,
-          body: { inspectionType: periodic ? 'PERIODIC' : 'RECEIVING', checklist: items.map((c) => ({ key: c.key, passed: !!checked[c.key] })), resultCondition: condition, ...(hold ? { setHold: { reason: hold } } : {}), expectedVersion: stay.version },
+          body: { inspectionType: periodic ? 'PERIODIC' : 'RECEIVING', checklist: items.map((checkItem) => ({ key: checkItem.key, passed: !!checked[checkItem.key] })), resultCondition: condition, ...(hold ? { setHold: { reason: hold } } : {}), expectedVersion: stay.version },
         })
       }
     >
       <div className="space-y-1.5">
-        {items.map((c) => (
-          <label key={c.key} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
-            <input type="checkbox" checked={!!checked[c.key]} onChange={(e) => setChecked((x) => ({ ...x, [c.key]: e.target.checked }))} />
-            <span className="flex-1">{i18n.language === 'vi' ? c.vi : c.en}</span>
-            {c.required ? <Badge tone="info">{t('vehicles.required')}</Badge> : null}
+        {items.map((checkItem) => (
+          <label key={checkItem.key} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
+            <input type="checkbox" checked={!!checked[checkItem.key]} onChange={(event) => setChecked((previous) => ({ ...previous, [checkItem.key]: event.target.checked }))} />
+            <span className="flex-1">{i18n.language === 'vi' ? checkItem.vi : checkItem.en}</span>
+            {checkItem.required ? <Badge tone="info">{t('vehicles.required')}</Badge> : null}
           </label>
         ))}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>{t('vehicles.condition')}</Label>
-          <Select value={condition} onChange={(e) => setCondition(e.target.value)}>
-            {['OK', 'MINOR_DAMAGE', 'MAJOR_DAMAGE', 'NEEDS_SERVICE'].map((c) => (
-              <option key={c} value={c}>
-                {t(`vehicles.conditionLabel.${c}`)}
+          <Select value={condition} onChange={(event) => setCondition(event.target.value)}>
+            {['OK', 'MINOR_DAMAGE', 'MAJOR_DAMAGE', 'NEEDS_SERVICE'].map((conditionOption) => (
+              <option key={conditionOption} value={conditionOption}>
+                {t(`vehicles.conditionLabel.${conditionOption}`)}
               </option>
             ))}
           </Select>
         </div>
         <div>
           <Label>{t('vehicles.holdOptional')}</Label>
-          <Input value={hold} onChange={(e) => setHold(e.target.value)} placeholder={t('yard.reason')} />
+          <Input value={hold} onChange={(event) => setHold(event.target.value)} placeholder={t('yard.reason')} />
         </div>
       </div>
     </FormDialog>
@@ -241,7 +241,7 @@ function InspectDialog({ siteId, stay, onClose }: { siteId: string; stay: Vehicl
 function SlotDialog({ siteId, stay, mode, onClose }: { siteId: string; stay: VehicleStayDto; mode: 'allocate' | 'move'; onClose: () => void }) {
   const { t } = useTranslation();
   const { data: slots } = useParkingSlots(siteId);
-  const free = useMemo(() => (slots ?? []).filter((l) => l.effectiveStatus === 'AVAILABLE'), [slots]);
+  const free = useMemo(() => (slots ?? []).filter((slot) => slot.effectiveStatus === 'AVAILABLE'), [slots]);
   const [slotId, setSlotId] = useState('');
   const [reason, setReason] = useState('');
   const run = useRun(siteId, onClose);
@@ -265,9 +265,9 @@ function SlotDialog({ siteId, stay, mode, onClose }: { siteId: string; stay: Veh
           {t('vehicles.slot')} <span className="text-muted">({free.length} {t('vehicles.free')})</span>
         </Label>
         <div className="grid max-h-56 grid-cols-5 gap-1.5 overflow-auto rounded-lg border border-line p-2">
-          {free.map((l) => (
-            <button type="button" key={l.id} onClick={() => setSlotId(l.id)} className={cn('rounded-md border px-1 py-1.5 text-xs font-medium', chosen === l.id ? 'border-brand bg-brand text-white' : 'border-line hover:border-brand')}>
-              {l.code}
+          {free.map((slot) => (
+            <button type="button" key={slot.id} onClick={() => setSlotId(slot.id)} className={cn('rounded-md border px-1 py-1.5 text-xs font-medium', chosen === slot.id ? 'border-brand bg-brand text-white' : 'border-line hover:border-brand')}>
+              {slot.code}
             </button>
           ))}
         </div>
@@ -275,7 +275,7 @@ function SlotDialog({ siteId, stay, mode, onClose }: { siteId: string; stay: Veh
       {mode === 'move' ? (
         <div>
           <Label>{t('yard.reason')}</Label>
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Re-slotting" />
+          <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Re-slotting" />
         </div>
       ) : null}
     </FormDialog>
@@ -302,7 +302,7 @@ function ScanSlotDialog({ siteId, stay, onClose }: { siteId: string; stay: Vehic
   );
 }
 
-function TextDialog({ title, label, fields, onClose, onSubmit, run }: { title: string; label: string; fields?: 'release'; onClose: () => void; onSubmit: (v: { text: string; recipient: string }) => void; run: { isPending: boolean; error: unknown } }) {
+function TextDialog({ title, label, fields, onClose, onSubmit, run }: { title: string; label: string; fields?: 'release'; onClose: () => void; onSubmit: (values: { text: string; recipient: string }) => void; run: { isPending: boolean; error: unknown } }) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const [recipient, setRecipient] = useState('');
@@ -310,12 +310,12 @@ function TextDialog({ title, label, fields, onClose, onSubmit, run }: { title: s
     <FormDialog title={title} onClose={onClose} pending={run.isPending} error={run.error} onSubmit={() => onSubmit({ text, recipient })}>
       <div>
         <Label>{label}</Label>
-        <Input value={text} onChange={(e) => setText(e.target.value)} required minLength={3} />
+        <Input value={text} onChange={(event) => setText(event.target.value)} required minLength={3} />
       </div>
       {fields === 'release' ? (
         <div>
           <Label>{t('vehicles.recipient')}</Label>
-          <Input value={recipient} onChange={(e) => setRecipient(e.target.value)} required minLength={2} />
+          <Input value={recipient} onChange={(event) => setRecipient(event.target.value)} required minLength={2} />
         </div>
       ) : null}
     </FormDialog>
@@ -335,9 +335,9 @@ type DialogKind = 'receive' | 'inspect' | 'allocate' | 'move' | 'parked' | 'hold
 
 function StayDetail({ siteId, siteCode, stay, timeZone }: { siteId: string; siteCode: string; stay: VehicleStayDto; timeZone: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
+  const can = useAuth((state) => state.can);
   const navigate = useNavigate();
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const [dialog, setDialog] = useState<DialogKind>(null);
   const run = useRun(siteId, () => setDialog(null));
   const { data: history } = useVehicleHistory(stay.vehicle.vin);
@@ -424,10 +424,10 @@ function StayDetail({ siteId, siteCode, stay, timeZone }: { siteId: string; site
       ) : null}
       <div className="flex flex-wrap gap-2">
         {actions
-          .filter((a) => a.show)
-          .map((a) => (
-            <Button key={a.label} size="sm" variant={a.variant} onClick={a.onClick} disabled={run.isPending}>
-              {a.icon} {a.label}
+          .filter((action) => action.show)
+          .map((action) => (
+            <Button key={action.label} size="sm" variant={action.variant} onClick={action.onClick} disabled={run.isPending}>
+              {action.icon} {action.label}
             </Button>
           ))}
       </div>
@@ -437,12 +437,12 @@ function StayDetail({ siteId, siteCode, stay, timeZone }: { siteId: string; site
           <History size={14} /> {t('vehicles.history')}
         </div>
         <ol className="relative space-y-2 border-l border-line pl-4">
-          {history?.slice(0, 20).map((h, i) => (
-            <li key={i} className="text-sm">
+          {history?.slice(0, 20).map((auditEntry, auditIndex) => (
+            <li key={auditIndex} className="text-sm">
               <span className="absolute -left-[5px] mt-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-brand" />
-              <div className="font-medium">{t(`vehicles.audit.${h.action}`, { defaultValue: h.action })}</div>
+              <div className="font-medium">{t(`vehicles.audit.${auditEntry.action}`, { defaultValue: auditEntry.action })}</div>
               <div className="text-xs text-muted">
-                {formatDateTime(h.at, timeZone)} · {h.actor ?? '—'} {h.site ? `· ${h.site}` : ''} {h.detail ? `· ${h.detail}` : ''}
+                {formatDateTime(auditEntry.at, timeZone)} · {auditEntry.actor ?? '—'} {auditEntry.site ? `· ${auditEntry.site}` : ''} {auditEntry.detail ? `· ${auditEntry.detail}` : ''}
               </div>
             </li>
           ))}
@@ -466,20 +466,20 @@ function StayDetail({ siteId, siteCode, stay, timeZone }: { siteId: string; site
 export function VehiclesPage() {
   const { t } = useTranslation();
   const { siteId, siteCode, timeZone } = useSiteContext();
-  const can = useAuth((s) => s.can);
+  const can = useAuth((state) => state.can);
   const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState<Filter>('all');
-  const [q, setQ] = useState('');
+  const [search, setSearch] = useState('');
   const [create, setCreate] = useState(false);
   const { data: stays } = useVehicleStays(siteId);
   const { data: slots } = useParkingSlots(siteId);
   const all = stays ?? [];
-  const term = q.trim().toUpperCase();
-  const shown = all.filter((v) => matchFilter(v, filter) && (!term || v.vehicle.vin.includes(term) || (v.vehicle.plateNumber ?? '').toUpperCase().includes(term) || `${v.vehicle.make} ${v.vehicle.model}`.toUpperCase().includes(term)));
-  const selected = all.find((v) => v.id === params.get('stay')) ?? shown[0];
+  const term = search.trim().toUpperCase();
+  const shown = all.filter((stay) => matchFilter(stay, filter) && (!term || stay.vehicle.vin.includes(term) || (stay.vehicle.plateNumber ?? '').toUpperCase().includes(term) || `${stay.vehicle.make} ${stay.vehicle.model}`.toUpperCase().includes(term)));
+  const selected = all.find((stay) => stay.id === params.get('stay')) ?? shown[0];
   const slotTotal = slots?.length ?? 0;
-  const slotFree = slots?.filter((l) => l.effectiveStatus === 'AVAILABLE').length ?? 0;
-  const count = (f: Filter) => all.filter((v) => matchFilter(v, f)).length;
+  const slotFree = slots?.filter((slot) => slot.effectiveStatus === 'AVAILABLE').length ?? 0;
+  const count = (filterKey: Filter) => all.filter((stay) => matchFilter(stay, filterKey)).length;
   return (
     <div className="h-full overflow-auto px-4 pb-6 pt-[76px]">
       <div className="mx-auto max-w-7xl">
@@ -500,7 +500,7 @@ export function VehiclesPage() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[400px_1fr]">
           <div className="card flex max-h-[calc(100vh-150px)] flex-col p-3">
             <div className="mb-2 flex gap-2">
-              <Input placeholder={t('vehicles.search')} value={q} onChange={(e) => setQ(e.target.value)} />
+              <Input placeholder={t('vehicles.search')} value={search} onChange={(event) => setSearch(event.target.value)} />
               {can(siteId, 'vehicle.receive') ? (
                 <Button size="sm" onClick={() => setCreate(true)}>
                   <Plus size={14} /> {t('flows.new')}
@@ -508,24 +508,24 @@ export function VehiclesPage() {
               ) : null}
             </div>
             <div className="mb-2 flex flex-wrap gap-1">
-              {FILTERS.map((f) => (
-                <button key={f} onClick={() => setFilter(f)} className={cn('rounded-full px-2.5 py-1 text-xs font-medium', filter === f ? 'bg-brand text-white' : 'bg-slate-100 text-muted hover:text-ink')}>
-                  {t(`vehicles.filter.${f}`)} · {count(f)}
+              {FILTERS.map((filterKey) => (
+                <button key={filterKey} onClick={() => setFilter(filterKey)} className={cn('rounded-full px-2.5 py-1 text-xs font-medium', filter === filterKey ? 'bg-brand text-white' : 'bg-slate-100 text-muted hover:text-ink')}>
+                  {t(`vehicles.filter.${filterKey}`)} · {count(filterKey)}
                 </button>
               ))}
             </div>
             <div className="-mx-1 flex-1 space-y-1.5 overflow-auto px-1">
-              {shown.map((v) => (
-                <button key={v.id} onClick={() => setParams({ stay: v.id })} className={cn('w-full rounded-xl border p-2.5 text-left text-sm', selected?.id === v.id ? 'border-brand bg-brand-soft/50' : 'border-line')}>
+              {shown.map((stay) => (
+                <button key={stay.id} onClick={() => setParams({ stay: stay.id })} className={cn('w-full rounded-xl border p-2.5 text-left text-sm', selected?.id === stay.id ? 'border-brand bg-brand-soft/50' : 'border-line')}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-[13px] font-semibold">{v.vehicle.vin}</span>
-                    <Badge tone={STAY_TONE[v.status]}>{t(`vehicles.status.${v.status}`)}</Badge>
+                    <span className="font-mono text-[13px] font-semibold">{stay.vehicle.vin}</span>
+                    <Badge tone={STAY_TONE[stay.status]}>{t(`vehicles.status.${stay.status}`)}</Badge>
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
-                    <span className="truncate">{[v.vehicle.make, v.vehicle.model].filter(Boolean).join(' ')}</span>
-                    <span className="ml-auto shrink-0 font-medium text-ink">{v.position.location?.code ?? ''}</span>
-                    {v.holdFlag ? <ShieldAlert size={12} className="shrink-0 text-bad" /> : null}
-                    {v.conditionStatus !== 'OK' ? <span className={cn('h-2 w-2 shrink-0 rounded-full', v.conditionStatus === 'MAJOR_DAMAGE' ? 'bg-bad' : 'bg-warn')} /> : null}
+                    <span className="truncate">{[stay.vehicle.make, stay.vehicle.model].filter(Boolean).join(' ')}</span>
+                    <span className="ml-auto shrink-0 font-medium text-ink">{stay.position.location?.code ?? ''}</span>
+                    {stay.holdFlag ? <ShieldAlert size={12} className="shrink-0 text-bad" /> : null}
+                    {stay.conditionStatus !== 'OK' ? <span className={cn('h-2 w-2 shrink-0 rounded-full', stay.conditionStatus === 'MAJOR_DAMAGE' ? 'bg-bad' : 'bg-warn')} /> : null}
                   </div>
                 </button>
               ))}

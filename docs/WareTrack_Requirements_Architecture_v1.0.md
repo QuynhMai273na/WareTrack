@@ -5049,7 +5049,7 @@ Cột API dùng số thứ tự endpoint ở mục 16.4; cột Test dùng mã UC
 
 ## 28. Decision Log
 
-**Ngày phê duyệt:** 10/10/2026 · **Người phê duyệt:** Chủ dự án (Product Owner) · **Phạm vi:** toàn bộ 50 đề xuất (DEC-01…DEC-50) được chốt theo phương án đề xuất; DEC-51…DEC-57 ghi nhận thông tin bổ sung do chủ dự án cung cấp cùng ngày; DEC-58 chốt nơi chạy API demo (đóng Q-21).
+**Ngày phê duyệt:** 10/10/2026 · **Người phê duyệt:** Chủ dự án (Product Owner) · **Phạm vi:** toàn bộ 50 đề xuất (DEC-01…DEC-50) được chốt theo phương án đề xuất; DEC-51…DEC-57 ghi nhận thông tin bổ sung do chủ dự án cung cấp cùng ngày; DEC-58 chốt nơi chạy API demo (đóng Q-21); DEC-59…DEC-66 (10–11/10/2026) là yêu cầu bổ sung của chủ dự án trong quá trình triển khai (mục 28.9).
 
 BRD v1.0 **không** bị sửa: các quyết định dưới đây là chi tiết hóa trong phạm vi baseline (BRD mục 12 nêu đây là thông số xác định ở solution design). Thay đổi về sau theo quy trình change request (BRD mục 13) và ghi thêm dòng vào bảng này.
 
@@ -5128,7 +5128,7 @@ BRD v1.0 **không** bị sửa: các quyết định dưới đây là chi tiế
 | DEC-44 | KPI MVP: K-01, **K-02 (Yard occupancy)**, K-03, K-04a, K-07, K-08, K-09, K-10 | Mục 22 |
 | DEC-45 | Đối tượng chưa có tọa độ: hiển thị ở bảng 2D và "unplaced tray" của zone trong 3D | GAP-23, 18.1 |
 | DEC-46 | Layout MVP: gợi ý từ node `LOC:` + chỉnh bằng JSON; editor kéo-thả là Later | 18.1, mục 22 |
-| DEC-47 | i18n từ đầu: tiếng Việt mặc định, tiếng Anh thứ hai | NFR-14 |
+| DEC-47 | i18n từ đầu: tiếng Việt mặc định, tiếng Anh thứ hai — **đổi bởi DEC-59**: tiếng Anh mặc định | NFR-14 |
 | DEC-48 | Animation MVP đi đường thẳng; lane graph là Should | 18.9 |
 | DEC-49 | Bảng phạm vi Must/Should/Later ở mục 22 (cập nhật theo DEC-44, DEC-55) | Mục 22 |
 | DEC-50 | Danh sách cảnh báo: low stock (ngưỡng SKU/site), dock overdue, appointment trễ, observation conflict, pin forklift < 20%, vượt capacity, exception quá SLA | FR-18.02 |
@@ -5158,6 +5158,19 @@ Các điểm dưới đây là lựa chọn của đội phát triển khi hiệ
 | IMP-04 | Thông báo idempotent theo `(eventId:category, userId)`; rule MVP: exception mới (người có `exception.resolve`), xe nâng bảo trì / pin < 20% (`equipment.manage`), yêu cầu xuất xe (`vehicle.release.approve`), xe tải tới cổng (`yard.dock.assign`) | FR-18.02 đầy đủ | Các cảnh báo còn lại (low stock, dock overdue, appointment trễ, capacity, exception quá SLA) để Should |
 | IMP-05 | KPI bãi lưu xe: `VEHICLES_STORED`, `VEHICLE_RELEASES` (kèm `YARD_OCCUPANCY`) thay cho ô pallet/dock trên dashboard của site `VEHICLE_YARD` | Mục 11 | Không trộn đơn vị (BR-31) |
 | IMP-06 | Upload ảnh/giấy tờ (MinIO) chưa bật trong demo | FR có ảnh kiểm tra xe, ảnh exception | DEC-51 demo; bật khi có storage (12.7) |
+
+### 28.9. Yêu cầu bổ sung trong quá trình triển khai (10–11/10/2026)
+
+| DEC | Quyết định | Hệ quả thiết kế |
+|---|---|---|
+| DEC-59 | Giao diện **tiếng Anh mặc định** để khớp video tham chiếu; tiếng Việt chọn trong menu người dùng (thay DEC-47) | `i18n/index.ts`: `lng = 'en'` trừ khi người dùng đã chọn `vi` (lưu cục bộ) |
+| DEC-60 | Bản demo **giống video ~95%**: sơ đồ, số lượng xe/hàng/kho, chuyển động xe | Seed theo video (5 site, 22 lượt xe, 17 xe nâng, ~8.000 pallet); `DemoDirector` (bật bằng `DEMO_DIRECTOR=true`) điều phối vòng đời xe tải/xe nâng qua chính API thật |
+| DEC-61 | **Bản đồ mạng lưới chung**: mọi site trên một scene, kéo qua lại được, "Network overview" thu nhỏ xem cả mạng | `Site.mapX/mapZ` (ô lưới 300 × 260 m, 3 cột); đổi site = camera bay tới; nhãn site bấm được khi thu nhỏ |
+| DEC-62 | **Chế độ vận hành thật** tách khỏi demo | `DEMO_DIRECTOR=false`, `SEED_ON_EMPTY=false`; API tự đồng bộ role/permission từ ma trận RBAC khi khởi động và tạo admin đầu tiên từ `BOOTSTRAP_ADMIN_*` khi DB chưa có user; `GET /health/info` báo `demo`/`live` (màn đăng nhập chỉ gợi ý tài khoản mẫu ở bản demo) |
+| DEC-63 | **Tạo site + trình vẽ sơ đồ** (UC-23) thay cho layout viết tay | Bản thiết kế (blueprint: nhà kho, dock, lưới staging, rack, ô chờ xe, trạm sạc, cổng, sức chứa trong nhà) → biên dịch bằng `SiteBuilder` dùng chung với seed; lưu nháp / xem trước 3D / publish thành `LayoutVersion` mới; mã vị trí giữ nguyên id (tồn kho, nhãn QR không đổi); vị trí còn hàng/xe không rút được (`LOCATION_IN_USE`) |
+| DEC-64 | **Trang quản trị danh mục** | User & phân quyền (tạo, gán/thu hồi vai trò theo site, khóa, đặt lại mật khẩu — thu hồi mọi phiên), SKU (thêm nhóm hàng), đối tác (khách hàng/nhà cung cấp/hãng vận tải), xe tải, tài xế, xe nâng theo site (trạm sạc + người lái); quyền theo ma trận 10.2 hiện có |
+| DEC-65 | **Nhập tồn kho đầu kỳ** từ CSV | `POST /sites/{id}/inventory/opening-stock` (`dryRun` kiểm tra trước); mỗi dòng một pallet, ghi sổ cái `RECEIPT` tham chiếu `OPENING_STOCK`; tất cả hoặc không; quyền mới `inventory.opening.import` (Admin, Site Manager, Inventory Controller) |
+| DEC-66 | **In nhãn QR** cho vị trí và pallet | Trang Labels: nhãn vị trí mã hóa `qrValue` (`WT:LOC:{site}:{code}`), nhãn pallet mã hóa mã pallet — đúng giá trị các màn hình quét đang chờ; in A4 từ trình duyệt |
 
 ---
 

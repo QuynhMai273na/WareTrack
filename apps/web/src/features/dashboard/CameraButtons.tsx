@@ -6,9 +6,9 @@ import { useScene } from '@/stores/scene';
 /** Nút camera như video: zoom +/−, xoay, reset, home (FR-12.03) + chuyển 2D/3D (FR-12.07). */
 export function CameraButtons() {
   const { t } = useTranslation();
-  const camera = useScene((s) => s.camera);
-  const mode = useScene((s) => s.mode);
-  const setMode = useScene((s) => s.setMode);
+  const camera = useScene((state) => state.camera);
+  const mode = useScene((state) => state.mode);
+  const setMode = useScene((state) => state.setMode);
   const btn = 'flex h-9 w-9 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100';
   return (
     <div className="pointer-events-auto flex flex-col items-center gap-2">
@@ -32,9 +32,9 @@ export function CameraButtons() {
         </div>
       ) : null}
       <div className="card flex flex-col p-1 text-xs font-semibold">
-        {(['3d', '2d'] as const).map((m) => (
-          <button key={m} className={cn('rounded-md px-2 py-1.5', mode === m ? 'bg-brand text-white' : 'text-muted hover:bg-slate-100')} onClick={() => setMode(m)}>
-            {m === '3d' ? t('common.view3d') : t('common.view2d')}
+        {(['3d', '2d'] as const).map((viewMode) => (
+          <button key={viewMode} className={cn('rounded-md px-2 py-1.5', mode === viewMode ? 'bg-brand text-white' : 'text-muted hover:bg-slate-100')} onClick={() => setMode(viewMode)}>
+            {viewMode === '3d' ? t('common.view3d') : t('common.view2d')}
           </button>
         ))}
       </div>

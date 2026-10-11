@@ -19,6 +19,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 export interface TxOptions {
   isolationLevel?: Prisma.TransactionIsolationLevel;
   maxRetries?: number;
+  /** Lệnh lô lớn (nhập tồn đầu kỳ) cần transaction dài hơn mặc định 10 giây. */
+  timeoutMs?: number;
 }
 
 /**
@@ -35,12 +37,12 @@ export class TxRunner {
       try {
         return await this.prisma.$transaction(fn, {
           isolationLevel: opts.isolationLevel ?? Prisma.TransactionIsolationLevel.ReadCommitted,
-          timeout: 10_000,
+          timeout: opts.timeoutMs ?? 10_000,
           maxWait: 5_000,
         });
       } catch (err) {
         if (err instanceof DomainError || attempt >= maxRetries || !isRetryableDbError(err)) throw err;
-        await new Promise((r) => setTimeout(r, 20 * 2 ** attempt + Math.random() * 20));
+        await new Promise((resolve) => setTimeout(resolve, 20 * 2 ** attempt + Math.random() * 20));
       }
     }
   }

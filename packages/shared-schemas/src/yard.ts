@@ -71,7 +71,7 @@ export const CreateVisitRequest = z
     etaAt: IsoDateTime.optional(),
   })
   .strict()
-  .refine((v) => new Date(v.appointmentEnd) > new Date(v.appointmentStart), {
+  .refine((request) => new Date(request.appointmentEnd) > new Date(request.appointmentStart), {
     message: 'appointmentEnd must be after appointmentStart',
     path: ['appointmentEnd'],
   });
@@ -118,7 +118,7 @@ export const WalkInRequest = z
     reason: z.string().min(3).max(300),
   })
   .strict()
-  .refine((v) => !!v.truckId !== !!v.newTruck, { message: 'Provide exactly one of truckId or newTruck', path: ['truckId'] });
+  .refine((request) => !!request.truckId !== !!request.newTruck, { message: 'Provide exactly one of truckId or newTruck', path: ['truckId'] });
 export type WalkInRequest = z.infer<typeof WalkInRequest>;
 
 export const AssignDockRequest = z.object({ dockLocationId: Uuid, expectedVersion: ExpectedVersion }).strict();

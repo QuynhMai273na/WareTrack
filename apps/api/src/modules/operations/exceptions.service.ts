@@ -28,33 +28,33 @@ export class ExceptionsService {
     private readonly codes: CodeGenerator,
   ) {}
 
-  async raise(tx: Tx, e: RaiseException) {
+  async raise(tx: Tx, exception: RaiseException) {
     const created = await tx.exceptionCase.create({
       data: {
-        siteId: e.siteId,
+        siteId: exception.siteId,
         code: await this.codes.prefixed(tx, 'EXC', 5),
-        caseType: e.caseType,
-        severity: e.severity ?? 'MEDIUM',
-        subjectType: e.subjectType ?? null,
-        subjectId: e.subjectId ?? null,
-        description: e.description,
+        caseType: exception.caseType,
+        severity: exception.severity ?? 'MEDIUM',
+        subjectType: exception.subjectType ?? null,
+        subjectId: exception.subjectId ?? null,
+        description: exception.description,
         createdById: currentContext()?.principal?.userId ?? null,
       },
     });
-    await this.audit.record(tx, { siteId: e.siteId, action: 'EXCEPTION_RAISED', entityType: 'ExceptionCase', entityId: created.id, reason: e.description });
+    await this.audit.record(tx, { siteId: exception.siteId, action: 'EXCEPTION_RAISED', entityType: 'ExceptionCase', entityId: created.id, reason: exception.description });
     await this.emit(tx, created.id);
     return created;
   }
 
   async emit(tx: Tx, id: string) {
-    const c = await tx.exceptionCase.findUniqueOrThrow({ where: { id } });
+    const exceptionCase = await tx.exceptionCase.findUniqueOrThrow({ where: { id } });
     await this.outbox.publish(tx, {
-      siteId: c.siteId,
+      siteId: exceptionCase.siteId,
       type: 'exception.raised',
       aggregateType: 'ExceptionCase',
-      aggregateId: c.id,
-      aggregateVersion: c.version,
-      data: { caseId: c.id, code: c.code, caseType: c.caseType, severity: c.severity, status: c.status, subjectType: c.subjectType, subjectId: c.subjectId, description: c.description },
+      aggregateId: exceptionCase.id,
+      aggregateVersion: exceptionCase.version,
+      data: { caseId: exceptionCase.id, code: exceptionCase.code, caseType: exceptionCase.caseType, severity: exceptionCase.severity, status: exceptionCase.status, subjectType: exceptionCase.subjectType, subjectId: exceptionCase.subjectId, description: exceptionCase.description },
     });
   }
 
@@ -64,35 +64,35 @@ export class ExceptionsService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
-    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: rows.flatMap((r) => [r.createdById, r.assigneeId]).filter((x): x is string => !!x) } } })).map((u) => [u.id, u.fullName]));
-    return rows.map((r) => ({
-      id: r.id,
-      code: r.code,
-      caseType: r.caseType,
-      severity: r.severity,
-      status: r.status,
-      subjectType: r.subjectType,
-      subjectId: r.subjectId,
-      description: r.description,
-      assignee: r.assigneeId ? (users.get(r.assigneeId) ?? null) : null,
-      resolutionCode: r.resolutionCode,
-      resolutionNote: r.resolutionNote,
-      createdBy: r.createdById ? (users.get(r.createdById) ?? null) : 'System',
-      createdAt: r.createdAt.toISOString(),
-      version: r.version,
+    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: rows.flatMap((row) => [row.createdById, row.assigneeId]).filter((userId): userId is string => !!userId) } } })).map((user) => [user.id, user.fullName]));
+    return rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      caseType: row.caseType,
+      severity: row.severity,
+      status: row.status,
+      subjectType: row.subjectType,
+      subjectId: row.subjectId,
+      description: row.description,
+      assignee: row.assigneeId ? (users.get(row.assigneeId) ?? null) : null,
+      resolutionCode: row.resolutionCode,
+      resolutionNote: row.resolutionNote,
+      createdBy: row.createdById ? (users.get(row.createdById) ?? null) : 'System',
+      createdAt: row.createdAt.toISOString(),
+      version: row.version,
     }));
   }
 
-  async create(siteId: string, e: Omit<RaiseException, 'siteId'>) {
-    return this.tx.run((tx) => this.raise(tx, { ...e, siteId }));
+  async create(siteId: string, exception: Omit<RaiseException, 'siteId'>) {
+    return this.tx.run((tx) => this.raise(tx, { ...exception, siteId }));
   }
 
   async transition(siteId: string, id: string, to: 'IN_REVIEW' | 'RESOLVED' | 'REJECTED', opts: { expectedVersion: number; resolutionCode?: string; note?: string; assigneeId?: string }) {
     return this.tx.run(async (tx) => {
-      const c = await tx.exceptionCase.findFirst({ where: { id, siteId } });
-      if (!c) throw DomainError.notFound('Exception');
+      const exceptionCase = await tx.exceptionCase.findFirst({ where: { id, siteId } });
+      if (!exceptionCase) throw DomainError.notFound('Exception');
       const allowed: Record<string, string[]> = { OPEN: ['IN_REVIEW', 'RESOLVED', 'REJECTED'], IN_REVIEW: ['RESOLVED', 'REJECTED'] };
-      if (!allowed[c.status]?.includes(to)) throw DomainError.invalidTransition('ExceptionCase', c.status, to);
+      if (!allowed[exceptionCase.status]?.includes(to)) throw DomainError.invalidTransition('ExceptionCase', exceptionCase.status, to);
       const res = await tx.exceptionCase.updateMany({
         where: { id, version: opts.expectedVersion },
         data: {

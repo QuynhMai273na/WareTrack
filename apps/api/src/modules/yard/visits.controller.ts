@@ -59,8 +59,8 @@ export class VisitsController {
 
   @Get('gate/lookup')
   @RequirePermission('yard.visit.gate_in')
-  lookup(@Param('siteId') siteId: string, @Query('q') q: string) {
-    return this.visits.lookup(siteId, q ?? '').then((visits) => ({ visits }));
+  lookup(@Param('siteId') siteId: string, @Query('q') searchText: string) {
+    return this.visits.lookup(siteId, searchText ?? '').then((visits) => ({ visits }));
   }
 
   @Post('visits/:visitId/arrive')

@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Languages, LogOut, Search } from 'lucide-rea
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { NavLink, useNavigate } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import { setLanguage } from '@/i18n';
 import { api } from '@/lib/api';
 import { useSites } from '@/lib/queries';
@@ -12,9 +12,10 @@ import { cn } from '@/lib/utils';
 import { useLive } from '@/realtime/useSiteRealtime';
 import { useAuth } from '@/stores/auth';
 import { useScene } from '@/stores/scene';
+import { useCanAdminister } from '../admin/admin-access';
 import { NotificationBell } from './NotificationBell';
 
-function Logo() {
+export function Logo() {
   return (
     <div className="flex items-center gap-2">
       <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden>
@@ -29,14 +30,14 @@ function Logo() {
 
 function LiveClock({ timeZone }: { timeZone?: string }) {
   const { t } = useTranslation();
-  const state = useLive((s) => s.state);
-  const since = useLive((s) => s.since);
+  const state = useLive((liveState) => liveState.state);
+  const since = useLive((liveState) => liveState.since);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 10_000);
     return () => clearInterval(id);
   }, []);
-  const fmt = (d: Date) => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone }).format(d);
+  const fmt = (date: Date) => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone }).format(date);
   const live = state === 'live';
   const stale = state === 'stale';
   return (
@@ -50,38 +51,38 @@ function LiveClock({ timeZone }: { timeZone?: string }) {
 /** Tìm kiếm toàn cục (FR-11.05) với phím tắt "/". */
 function GlobalSearch() {
   const { t } = useTranslation();
-  const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  const select = useScene((s) => s.select);
-  const { data } = useQuery({ queryKey: ['search', q], queryFn: () => api<SearchResult[]>(`/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2 });
+  const select = useScene((state) => state.select);
+  const { data } = useQuery({ queryKey: ['search', query], queryFn: () => api<SearchResult[]>(`/search?q=${encodeURIComponent(query)}`), enabled: query.trim().length >= 2 });
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
-        e.preventDefault();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+        event.preventDefault();
         input.current?.focus();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  const pick = (r: SearchResult) => {
+  const pick = (result: SearchResult) => {
     setOpen(false);
-    setQ('');
-    if (!r.siteCode || !r.siteId) return;
-    navigate(`/sites/${r.siteCode}`);
-    const type = r.type === 'truck' ? 'truck' : r.type === 'forklift' ? 'forklift' : r.type === 'vehicle' ? 'vehicle' : r.type === 'location' ? 'dock' : null;
-    if (type) setTimeout(() => select({ siteId: r.siteId!, type, id: r.id }), 400);
+    setQuery('');
+    if (!result.siteCode || !result.siteId) return;
+    navigate(`/sites/${result.siteCode}`);
+    const type = result.type === 'truck' ? 'truck' : result.type === 'forklift' ? 'forklift' : result.type === 'vehicle' ? 'vehicle' : result.type === 'location' ? 'dock' : null;
+    if (type) setTimeout(() => select({ siteId: result.siteId!, type, id: result.id }), 400);
   };
   return (
     <div className="relative w-full min-w-[120px] max-w-md">
       <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
       <input
         ref={input}
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
@@ -92,13 +93,13 @@ function GlobalSearch() {
       <kbd className="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-line px-1.5 text-xs text-muted">/</kbd>
       {open && data && data.length > 0 ? (
         <div className="card absolute left-0 right-0 top-12 z-30 max-h-80 overflow-auto p-1">
-          {data.map((r) => (
-            <button key={`${r.type}${r.id}`} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-50" onMouseDown={() => pick(r)}>
+          {data.map((result) => (
+            <button key={`${result.type}${result.id}`} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-50" onMouseDown={() => pick(result)}>
               <span>
-                <span className="font-medium">{r.code}</span> <span className="text-muted">· {r.label}</span>
+                <span className="font-medium">{result.code}</span> <span className="text-muted">· {result.label}</span>
               </span>
               <span className="text-xs text-muted">
-                {r.type} {r.siteCode ? `· ${r.siteCode}` : ''}
+                {result.type} {result.siteCode ? `· ${result.siteCode}` : ''}
               </span>
             </button>
           ))}
@@ -112,12 +113,12 @@ function SiteSwitcher({ siteCode }: { siteCode: string }) {
   const { t } = useTranslation();
   const { data: sites } = useSites();
   const navigate = useNavigate();
-  const current = sites?.find((s) => s.code === siteCode);
-  const fillPct = (s: NonNullable<typeof sites>[number]) => {
-    const f = s.fill;
-    if (!f) return null;
-    if (s.siteType === 'VEHICLE_YARD') return f.slotsTotal ? Math.round((f.slotsUsed / f.slotsTotal) * 100) : null;
-    return f.palletPositionsTotal ? Math.round((f.palletPositionsUsed / f.palletPositionsTotal) * 100) : null;
+  const current = sites?.find((site) => site.code === siteCode);
+  const fillPct = (site: NonNullable<typeof sites>[number]) => {
+    const fill = site.fill;
+    if (!fill) return null;
+    if (site.siteType === 'VEHICLE_YARD') return fill.slotsTotal ? Math.round((fill.slotsUsed / fill.slotsTotal) * 100) : null;
+    return fill.palletPositionsTotal ? Math.round((fill.palletPositionsUsed / fill.palletPositionsTotal) * 100) : null;
   };
   return (
     <Dropdown.Root>
@@ -139,7 +140,7 @@ function SiteSwitcher({ siteCode }: { siteCode: string }) {
         </Dropdown.Trigger>
       </div>
       <Dropdown.Portal>
-        <Dropdown.Content align="end" sideOffset={8} className="card z-50 w-[316px] p-1.5">
+        <Dropdown.Content align="end" sideOffset={8} className="card z-50 w-[340px] p-1.5">
           <Dropdown.Item
             onSelect={() => {
               navigate(`/sites/${siteCode}`);
@@ -147,26 +148,26 @@ function SiteSwitcher({ siteCode }: { siteCode: string }) {
             }}
             className="mb-1 flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 outline-none data-[highlighted]:bg-slate-50"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-700 text-[11px] font-bold text-white">ALL</span>
+            <span className="flex h-10 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-[11px] font-bold text-white">ALL</span>
             <span className="leading-tight">
               <span className="block text-sm font-semibold">{t('v.network.title')}</span>
               <span className="block text-xs text-muted">{t('v.network.sub', { n: sites?.length ?? 0 })}</span>
             </span>
           </Dropdown.Item>
-          {sites?.map((s) => (
-            <Dropdown.Item key={s.id} onSelect={() => navigate(`/sites/${s.code}`)} className={cn('flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 outline-none data-[highlighted]:bg-slate-50', s.code === siteCode && 'bg-brand-soft/50')}>
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand text-[11px] font-bold text-white">{s.code}</span>
+          {sites?.map((site) => (
+            <Dropdown.Item key={site.id} onSelect={() => navigate(`/sites/${site.code}`)} className={cn('flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 outline-none data-[highlighted]:bg-slate-50', site.code === siteCode && 'bg-brand-soft/50')}>
+              <span className="flex h-10 w-12 shrink-0 items-center justify-center whitespace-nowrap rounded-lg bg-brand text-[11px] font-bold text-white">{site.code}</span>
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="flex items-center justify-between text-sm font-semibold">
-                  <span className="truncate">{s.name}</span>
-                  <span className="tabular text-xs">{fillPct(s) ?? 0}%</span>
+                <span className="flex items-baseline justify-between gap-3">
+                  <span className="truncate text-sm font-semibold">{site.name}</span>
+                  <span className="tabular shrink-0 text-xs font-semibold">{fillPct(site) ?? 0}%</span>
                 </span>
-                <span className="mt-1 flex items-center gap-2">
-                  <span className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
-                    <span className="block h-full rounded-full bg-brand" style={{ width: `${fillPct(s) ?? 0}%` }} />
+                <span className="mt-1.5 flex items-center gap-3">
+                  <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <span className="block h-full rounded-full bg-brand" style={{ width: `${fillPct(site) ?? 0}%` }} />
                   </span>
-                  <span className="truncate text-[11px] text-muted">
-                    {t('v.network.docked', { a: s.fill?.docksOccupied ?? 0, b: s.fill?.docksTotal ?? 0 })} · {t('v.network.inbound', { n: s.fill?.inbound ?? 0 })}
+                  <span className="tabular w-[120px] shrink-0 whitespace-nowrap text-right text-[11px] text-muted">
+                    {t('v.network.docked', { a: site.fill?.docksOccupied ?? 0, b: site.fill?.docksTotal ?? 0 })} · {t('v.network.inbound', { n: site.fill?.inbound ?? 0 })}
                   </span>
                 </span>
               </span>
@@ -193,12 +194,13 @@ function Avatar() {
 
 export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZone?: string; siteId?: string }) {
   const { t, i18n } = useTranslation();
-  const me = useAuth((s) => s.me);
-  const logout = useAuth((s) => s.logout);
-  const can = useAuth((s) => s.can);
-  const roles = me?.sites.find((s) => s.code === siteCode)?.roles ?? me?.enterpriseRoles ?? [];
+  const me = useAuth((state) => state.me);
+  const logout = useAuth((state) => state.logout);
+  const can = useAuth((state) => state.can);
+  const roles = me?.sites.find((siteAccess) => siteAccess.code === siteCode)?.roles ?? me?.enterpriseRoles ?? [];
   const { data: sites } = useSites();
-  const isVehicleYard = sites?.find((s) => s.code === siteCode)?.siteType === 'VEHICLE_YARD';
+  const isVehicleYard = sites?.find((site) => site.code === siteCode)?.siteType === 'VEHICLE_YARD';
+  const canAdminister = useCanAdminister();
   const nav = [
     { to: `/sites/${siteCode}`, label: t('nav.overview'), end: true, show: true },
     { to: `/sites/${siteCode}/yard`, label: t('nav.yard'), show: can(siteId, 'yard.visit.read') },
@@ -208,8 +210,14 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
     { to: `/sites/${siteCode}/vehicles`, label: t('nav.vehicles'), show: isVehicleYard && can(siteId, 'vehicle.read') },
     { to: `/sites/${siteCode}/tasks`, label: t('nav.tasks'), show: can(siteId, 'task.read') },
     { to: `/sites/${siteCode}/exceptions`, label: t('nav.exceptions'), show: can(siteId, 'exception.read') },
+    { to: `/sites/${siteCode}/labels`, label: t('nav.labels'), show: can(siteId, 'site.read') && (can(siteId, 'location.manage') || can(siteId, 'inventory.move') || can(siteId, 'inbound.receive')) },
+    { to: `/sites/${siteCode}/inventory/import`, label: t('nav.openingStock'), show: can(siteId, 'inventory.opening.import') },
+    { to: '/admin', label: t('nav.administration'), show: canAdminister },
   ];
   const role = roles[0];
+  // Tự tính trạng thái active: Dropdown.Item asChild (Radix Slot) chỉ nối className dạng chuỗi, không nhận className dạng hàm của NavLink
+  const { pathname } = useLocation();
+  const isActive = (navItem: { to: string; end?: boolean }) => (navItem.end ? pathname === navItem.to : pathname === navItem.to || pathname.startsWith(`${navItem.to}/`));
   return (
     <header className="pointer-events-auto flex h-[66px] items-center gap-4 border-b border-white/60 bg-white/85 px-5 backdrop-blur-md">
       <Dropdown.Root>
@@ -219,11 +227,11 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
         <Dropdown.Portal>
           <Dropdown.Content align="start" sideOffset={8} className="card z-50 w-56 p-1">
             {nav
-              .filter((n) => n.show)
-              .map((n) => (
-                <Dropdown.Item key={n.to} asChild>
-                  <NavLink to={n.to} end={n.end} className={({ isActive }) => cn('flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm outline-none data-[highlighted]:bg-slate-50', isActive ? 'font-semibold text-brand' : 'text-ink')}>
-                    {n.label}
+              .filter((navItem) => navItem.show)
+              .map((navItem) => (
+                <Dropdown.Item key={navItem.to} asChild>
+                  <NavLink to={navItem.to} end={navItem.end} className={cn('flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm outline-none data-[highlighted]:bg-slate-50', isActive(navItem) ? 'font-semibold text-brand' : 'text-ink')}>
+                    {navItem.label}
                   </NavLink>
                 </Dropdown.Item>
               ))}
@@ -250,11 +258,11 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
         <Dropdown.Portal>
           <Dropdown.Content align="end" sideOffset={6} className="card z-50 w-52 p-1">
             {nav
-              .filter((n) => n.show)
-              .map((n) => (
-                <Dropdown.Item key={n.to} asChild>
-                  <NavLink to={n.to} end={n.end} className="flex cursor-pointer items-center rounded-lg px-2 py-2 text-sm outline-none data-[highlighted]:bg-slate-50">
-                    {n.label}
+              .filter((navItem) => navItem.show)
+              .map((navItem) => (
+                <Dropdown.Item key={navItem.to} asChild>
+                  <NavLink to={navItem.to} end={navItem.end} className={cn('flex cursor-pointer items-center rounded-lg px-2 py-2 text-sm outline-none data-[highlighted]:bg-slate-50', isActive(navItem) && 'font-semibold text-brand')}>
+                    {navItem.label}
                   </NavLink>
                 </Dropdown.Item>
               ))}

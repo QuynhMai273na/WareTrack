@@ -68,3 +68,30 @@ body {
   opacity: 0.7;
   margin-left: 6px;
 }
+
+/* In nhãn QR: chỉ in vùng nhãn, bỏ thanh điều hướng và các nút */
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+  }
+  .print-area .no-print {
+    display: none;
+  }
+  .label-card {
+    break-inside: avoid;
+    border-style: solid;
+  }
+}

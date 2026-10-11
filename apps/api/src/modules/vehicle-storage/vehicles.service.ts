@@ -62,10 +62,10 @@ export class VehiclesService implements OnModuleInit {
     this.tasks.registerHandler('MOVE_VEHICLE', {
       complete: async (tx, task, ctx) => this.arrive(tx, task.siteId, task.subjectId, ctx.destinationLocationId, ctx.source, task.id),
       cancel: async (tx, task) => {
-        const reserved = (await this.occupancy.activeByOccupant('VEHICLE_STAY', task.subjectId, tx)).filter((o) => o.kind === 'RESERVED');
-        for (const r of reserved) {
-          await this.occupancy.release(tx, r.id);
-          await this.sites.emitLocationStatus(tx, task.siteId, r.locationId);
+        const reserved = (await this.occupancy.activeByOccupant('VEHICLE_STAY', task.subjectId, tx)).filter((occupancy) => occupancy.kind === 'RESERVED');
+        for (const reservation of reserved) {
+          await this.occupancy.release(tx, reservation.id);
+          await this.sites.emitLocationStatus(tx, task.siteId, reservation.locationId);
         }
         const stay = await tx.vehicleStay.findUnique({ where: { id: task.subjectId } });
         if (stay?.status === 'ALLOCATED') await this.transition(tx, stay, 'INSPECTED');
@@ -74,8 +74,8 @@ export class VehiclesService implements OnModuleInit {
     this.contributors.addKpis((siteId, { todayStart, now }) => this.kpis(siteId, todayStart, now));
     this.contributors.addSnapshot(async (tx, siteId) => {
       const stays = await tx.vehicleStay.findMany({ where: { siteId, status: { in: ACTIVE } }, include: { vehicle: true } });
-      const occ = await tx.locationOccupancy.findMany({ where: { occupantType: 'VEHICLE_STAY', occupantId: { in: stays.map((s) => s.id) }, releasedAt: null, kind: 'OCCUPIED' } });
-      return { vehicles: stays.map((s) => this.snapshot(s, occ.find((o) => o.occupantId === s.id) ?? null)) };
+      const occ = await tx.locationOccupancy.findMany({ where: { occupantType: 'VEHICLE_STAY', occupantId: { in: stays.map((stay) => stay.id) }, releasedAt: null, kind: 'OCCUPIED' } });
+      return { vehicles: stays.map((stay) => this.snapshot(stay, occ.find((occupancy) => occupancy.occupantId === stay.id) ?? null)) };
     });
   }
 
@@ -138,8 +138,8 @@ export class VehiclesService implements OnModuleInit {
     await this.tx.run(async (tx) => {
       const stay = await this.load(tx, siteId, id);
       const settings = await this.sites.settings(siteId, tx);
-      const passed = new Set(body.checklist.filter((c) => c.passed).map((c) => c.key));
-      const missing = settings.vehicleInspectionChecklist.filter((c) => c.required && !passed.has(c.key) && !body.checklist.some((x) => x.key === c.key)).map((c) => c.key);
+      const passed = new Set(body.checklist.filter((result) => result.passed).map((result) => result.key));
+      const missing = settings.vehicleInspectionChecklist.filter((checklistItem) => checklistItem.required && !passed.has(checklistItem.key) && !body.checklist.some((result) => result.key === checklistItem.key)).map((checklistItem) => checklistItem.key);
       if (missing.length) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Inspection checklist incomplete', { missing });
       await tx.vehicleInspection.create({ data: { siteId, vehicleStayId: stay.id, inspectionType: body.inspectionType, checklist: body.checklist as Prisma.InputJsonValue, resultCondition: body.resultCondition, inspectorId: requirePrincipal().userId } });
       const data: Prisma.VehicleStayUncheckedUpdateManyInput = { conditionStatus: body.resultCondition };
@@ -187,7 +187,7 @@ export class VehiclesService implements OnModuleInit {
       const stay = await this.load(tx, siteId, id);
       if (stay.version !== expectedVersion) throw DomainError.concurrent();
       if (stay.status !== 'ALLOCATED') throw DomainError.invalidTransition('VehicleStay', stay.status, 'STORED');
-      const reserved = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((o) => o.kind === 'RESERVED');
+      const reserved = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((occupancy) => occupancy.kind === 'RESERVED');
       const scanned = await tx.location.findFirst({ where: { siteId, deletedAt: null, OR: [{ qrValue: scan.trim() }, { code: { equals: scan.trim(), mode: 'insensitive' } }] } });
       if (!scanned || scanned.locationType !== 'PARKING_SLOT') throw DomainError.rule('SLOT_MISMATCH', `${scan} is not a parking slot`);
       if (reserved && reserved.locationId !== scanned.id) {
@@ -197,7 +197,7 @@ export class VehiclesService implements OnModuleInit {
         await this.sites.emitLocationStatus(tx, siteId, reserved.locationId);
       }
       const open = await tx.operationTask.findMany({ where: { sourceType: 'VEHICLE_STAY', sourceId: stay.id, status: { in: ['PENDING', 'ASSIGNED', 'BLOCKED'] } } });
-      for (const t of open) await tx.operationTask.update({ where: { id: t.id }, data: { status: 'CANCELLED', blockReason: 'Parked confirmed directly', version: { increment: 1 } } });
+      for (const openTask of open) await tx.operationTask.update({ where: { id: openTask.id }, data: { status: 'CANCELLED', blockReason: 'Parked confirmed directly', version: { increment: 1 } } });
       await this.arrive(tx, siteId, stay.id, scanned.id, method === 'MANUAL' ? 'CONFIRMED_MANUAL' : 'CONFIRMED_SCAN', null);
     });
     return this.get(siteId, id);
@@ -208,7 +208,7 @@ export class VehiclesService implements OnModuleInit {
     await this.tx.run(async (tx) => {
       const stay = await this.load(tx, siteId, id);
       if (!['STORED', 'RELEASE_REQUESTED'].includes(stay.status)) throw DomainError.invalidTransition('VehicleStay', stay.status, 'MOVE');
-      const current = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((o) => o.kind === 'OCCUPIED');
+      const current = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((occupancy) => occupancy.kind === 'OCCUPIED');
       await this.locks.lockForUpdate(tx, [toLocationId, ...(current ? [current.locationId] : [])]);
       await this.occupancy.reserve(tx, { siteId, locationId: toLocationId, occupantType: 'VEHICLE_STAY', occupantId: stay.id });
       await this.createMoveTask(tx, stay, current?.locationId ?? null, toLocationId, reason);
@@ -263,7 +263,7 @@ export class VehiclesService implements OnModuleInit {
         await this.tasks.cancelBySource(tx, 'VEHICLE_STAY', stay.id, 'Superseded by release');
         const releaseLoc = await tx.location.findFirst({ where: { siteId, code: { startsWith: 'REL' }, deletedAt: null, blockedAt: null } });
         if (!releaseLoc) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'No release staging location at this site');
-        const current = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((o) => o.kind === 'OCCUPIED');
+        const current = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((occupancy) => occupancy.kind === 'OCCUPIED');
         await this.locks.lockForUpdate(tx, [releaseLoc.id, ...(current ? [current.locationId] : [])]);
         await this.occupancy.reserve(tx, { siteId, locationId: releaseLoc.id, occupantType: 'VEHICLE_STAY', occupantId: stay.id });
         await this.createMoveTask(tx, stay, current?.locationId ?? null, releaseLoc.id, 'RELEASE');
@@ -283,7 +283,7 @@ export class VehiclesService implements OnModuleInit {
       const stay = await this.load(tx, siteId, id);
       const req = await tx.releaseRequest.findFirst({ where: { vehicleStayId: stay.id, status: 'APPROVED' } });
       if (!req) throw DomainError.blocked('RELEASE_BLOCKED', 'Release request is not approved', [{ code: 'NOT_APPROVED', message: 'Approval required (BR-28)' }]);
-      const occ = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((o) => o.kind === 'OCCUPIED');
+      const occ = (await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx)).find((occupancy) => occupancy.kind === 'OCCUPIED');
       const loc = occ ? await tx.location.findUnique({ where: { id: occ.locationId } }) : null;
       if (!loc?.code.startsWith('REL')) throw DomainError.blocked('RELEASE_BLOCKED', 'Vehicle is not at the release staging area yet', [{ code: 'NOT_AT_RELEASE_STAGING', message: `Vehicle is at ${loc?.code ?? 'unknown'}` }]);
       await this.transition(tx, stay, 'RELEASED', { releasedAt: new Date() }, expectedVersion);
@@ -301,7 +301,7 @@ export class VehiclesService implements OnModuleInit {
       await tx.gateEvent.create({ data: { siteId, eventType: 'VEHICLE_OUT', vehicleStayId: stay.id, actorId: requirePrincipal().userId } });
       await this.movements.record(tx, { siteId, subjectType: 'VEHICLE_STAY', subjectId: stay.id, fromLocationId: released[0] ?? null, toLocationId: null, positionSource: 'CONFIRMED_MANUAL', reason: 'Exited site' });
       await this.audit.record(tx, { siteId, action: 'VEHICLE_EXITED', entityType: 'VehicleStay', entityId: stay.id });
-      for (const l of released) await this.sites.emitLocationStatus(tx, siteId, l);
+      for (const releasedLocationId of released) await this.sites.emitLocationStatus(tx, siteId, releasedLocationId);
       await this.emit(tx, stay.id, 'vehicle.location_changed');
     });
     return this.get(siteId, id);
@@ -322,9 +322,9 @@ export class VehiclesService implements OnModuleInit {
   private async arrive(tx: Tx, siteId: string, stayId: string, destinationId: string, source: 'CONFIRMED_SCAN' | 'CONFIRMED_MANUAL' | 'SENSOR_OBSERVED' | 'INFERRED', taskId: string | null) {
     const stay = await this.load(tx, siteId, stayId);
     const active = await this.occupancy.activeByOccupant('VEHICLE_STAY', stay.id, tx);
-    const reserved = active.find((o) => o.kind === 'RESERVED' && o.locationId === destinationId);
+    const reserved = active.find((occupancy) => occupancy.kind === 'RESERVED' && occupancy.locationId === destinationId);
     if (!reserved) throw DomainError.rule('SLOT_MISMATCH', 'Destination was not reserved for this vehicle');
-    const old = active.find((o) => o.kind === 'OCCUPIED');
+    const old = active.find((occupancy) => occupancy.kind === 'OCCUPIED');
     await this.locks.lockForUpdate(tx, [destinationId, ...(old ? [old.locationId] : [])]);
     if (old) await this.occupancy.release(tx, old.id);
     await this.occupancy.occupy(tx, reserved.id, source);
@@ -351,47 +351,47 @@ export class VehiclesService implements OnModuleInit {
   }
 
   private async load(tx: Tx, siteId: string, id: string) {
-    const s = await tx.vehicleStay.findFirst({ where: { id, siteId }, include: { vehicle: true } });
-    if (!s) throw DomainError.notFound('Vehicle stay');
-    return s;
+    const stay = await tx.vehicleStay.findFirst({ where: { id, siteId }, include: { vehicle: true } });
+    if (!stay) throw DomainError.notFound('Vehicle stay');
+    return stay;
   }
 
-  private async transition(tx: Tx, s: VehicleStay, to: VehicleStayStatus, data: Prisma.VehicleStayUncheckedUpdateManyInput = {}, expectedVersion?: number) {
-    if (!TRANSITIONS[s.status].includes(to)) throw DomainError.invalidTransition('VehicleStay', s.status, to);
-    const res = await tx.vehicleStay.updateMany({ where: { id: s.id, status: s.status, version: expectedVersion ?? s.version }, data: { ...data, status: to, version: { increment: 1 } } });
+  private async transition(tx: Tx, stay: VehicleStay, to: VehicleStayStatus, data: Prisma.VehicleStayUncheckedUpdateManyInput = {}, expectedVersion?: number) {
+    if (!TRANSITIONS[stay.status].includes(to)) throw DomainError.invalidTransition('VehicleStay', stay.status, to);
+    const res = await tx.vehicleStay.updateMany({ where: { id: stay.id, status: stay.status, version: expectedVersion ?? stay.version }, data: { ...data, status: to, version: { increment: 1 } } });
     if (res.count === 0) throw DomainError.concurrent();
-    await this.emit(tx, s.id, 'vehicle.status_changed', s.status);
+    await this.emit(tx, stay.id, 'vehicle.status_changed', stay.status);
   }
 
-  private async update(tx: Tx, s: VehicleStay, data: Prisma.VehicleStayUncheckedUpdateManyInput, expectedVersion: number) {
-    const res = await tx.vehicleStay.updateMany({ where: { id: s.id, version: expectedVersion }, data: { ...data, version: { increment: 1 } } });
+  private async update(tx: Tx, stay: VehicleStay, data: Prisma.VehicleStayUncheckedUpdateManyInput, expectedVersion: number) {
+    const res = await tx.vehicleStay.updateMany({ where: { id: stay.id, version: expectedVersion }, data: { ...data, version: { increment: 1 } } });
     if (res.count === 0) throw DomainError.concurrent();
-    await this.emit(tx, s.id, 'vehicle.status_changed', s.status);
+    await this.emit(tx, stay.id, 'vehicle.status_changed', stay.status);
   }
 
-  private snapshot(s: VehicleStay & { vehicle: { vin: string; make: string | null; model: string | null } }, occ: { locationId: string; positionSource: string | null; occupiedAt: Date | null; startedAt: Date } | null): SnapshotVehicle {
+  private snapshot(stay: VehicleStay & { vehicle: { vin: string; make: string | null; model: string | null } }, occ: { locationId: string; positionSource: string | null; occupiedAt: Date | null; startedAt: Date } | null): SnapshotVehicle {
     return {
-      stayId: s.id,
-      vin: s.vehicle.vin,
-      label: [s.vehicle.make, s.vehicle.model].filter(Boolean).join(' '),
-      status: s.status,
-      condition: s.conditionStatus,
-      hold: s.holdFlag,
+      stayId: stay.id,
+      vin: stay.vehicle.vin,
+      label: [stay.vehicle.make, stay.vehicle.model].filter(Boolean).join(' '),
+      status: stay.status,
+      condition: stay.conditionStatus,
+      hold: stay.holdFlag,
       position: occ ? { locationId: occ.locationId, source: (occ.positionSource ?? 'CONFIRMED_MANUAL') as NonNullable<SnapshotVehicle['position']>['source'], confirmedAt: (occ.occupiedAt ?? occ.startedAt).toISOString() } : null,
-      version: s.version,
+      version: stay.version,
     };
   }
 
   private async emit(tx: Tx, stayId: string, type: 'vehicle.status_changed' | 'vehicle.location_changed', fromStatus?: VehicleStayStatus) {
-    const s = await tx.vehicleStay.findUniqueOrThrow({ where: { id: stayId }, include: { vehicle: true } });
-    const occ = await tx.locationOccupancy.findFirst({ where: { occupantType: 'VEHICLE_STAY', occupantId: s.id, releasedAt: null, kind: 'OCCUPIED' } });
+    const stay = await tx.vehicleStay.findUniqueOrThrow({ where: { id: stayId }, include: { vehicle: true } });
+    const occ = await tx.locationOccupancy.findFirst({ where: { occupantType: 'VEHICLE_STAY', occupantId: stay.id, releasedAt: null, kind: 'OCCUPIED' } });
     await this.outbox.publish(tx, {
-      siteId: s.siteId,
+      siteId: stay.siteId,
       type,
       aggregateType: 'VehicleStay',
-      aggregateId: s.id,
-      aggregateVersion: s.version,
-      data: { vehicle: this.snapshot(s, occ), fromStatus: fromStatus ?? null },
+      aggregateId: stay.id,
+      aggregateVersion: stay.version,
+      data: { vehicle: this.snapshot(stay, occ), fromStatus: fromStatus ?? null },
     });
   }
 
@@ -407,53 +407,53 @@ export class VehiclesService implements OnModuleInit {
       orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
       take: 500,
     });
-    return this.toDtos(stays.map((s) => s.id));
+    return this.toDtos(stays.map((stay) => stay.id));
   }
 
   async get(siteId: string, id: string): Promise<VehicleStayDto> {
-    const s = await this.prisma.vehicleStay.findFirst({ where: { id, siteId } });
-    if (!s) throw DomainError.notFound('Vehicle stay');
-    return (await this.toDtos([s.id]))[0];
+    const stay = await this.prisma.vehicleStay.findFirst({ where: { id, siteId } });
+    if (!stay) throw DomainError.notFound('Vehicle stay');
+    return (await this.toDtos([stay.id]))[0];
   }
 
   private async toDtos(ids: string[]): Promise<VehicleStayDto[]> {
     const stays = await this.prisma.vehicleStay.findMany({ where: { id: { in: ids } }, include: { vehicle: true, releaseRequests: { where: { status: { in: ['PENDING', 'APPROVED'] } } } } });
     const occ = await this.prisma.locationOccupancy.findMany({ where: { occupantType: 'VEHICLE_STAY', occupantId: { in: ids }, releasedAt: null } });
-    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: occ.map((o) => o.locationId) } } })).map((l) => [l.id, l]));
-    const owners = new Map((await this.prisma.partner.findMany({ where: { id: { in: stays.map((s) => s.vehicle.ownerPartnerId).filter((x): x is string => !!x) } } })).map((p) => [p.id, p.name]));
-    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: stays.flatMap((s) => s.releaseRequests.map((r) => r.requestedById)) } } })).map((u) => [u.id, u.fullName]));
+    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: occ.map((occupancy) => occupancy.locationId) } } })).map((location) => [location.id, location]));
+    const owners = new Map((await this.prisma.partner.findMany({ where: { id: { in: stays.map((stay) => stay.vehicle.ownerPartnerId).filter((partnerId): partnerId is string => !!partnerId) } } })).map((partner) => [partner.id, partner.name]));
+    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: stays.flatMap((stay) => stay.releaseRequests.map((releaseRequest) => releaseRequest.requestedById)) } } })).map((user) => [user.id, user.fullName]));
     const tasks = await this.prisma.operationTask.findMany({ where: { sourceType: 'VEHICLE_STAY', sourceId: { in: ids }, status: { in: ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'BLOCKED'] } } });
-    const order = new Map(ids.map((id, i) => [id, i]));
+    const order = new Map(ids.map((id, index) => [id, index]));
     return stays
-      .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
-      .map((s) => {
-        const mine = occ.filter((o) => o.occupantId === s.id);
-        const o = mine.find((x) => x.kind === 'OCCUPIED') ?? mine[0];
-        const loc = o ? locs.get(o.locationId) : undefined;
-        const req = s.releaseRequests[0];
-        const task = tasks.find((t) => t.sourceId === s.id);
-        const iso = (d: Date | null) => d?.toISOString() ?? null;
+      .sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0))
+      .map((stay) => {
+        const mine = occ.filter((candidate) => candidate.occupantId === stay.id);
+        const occupancy = mine.find((candidate) => candidate.kind === 'OCCUPIED') ?? mine[0];
+        const loc = occupancy ? locs.get(occupancy.locationId) : undefined;
+        const req = stay.releaseRequests[0];
+        const task = tasks.find((operationTask) => operationTask.sourceId === stay.id);
+        const iso = (date: Date | null) => date?.toISOString() ?? null;
         return {
-          id: s.id,
-          siteId: s.siteId,
-          vehicle: { id: s.vehicle.id, vin: s.vehicle.vin, make: s.vehicle.make, model: s.vehicle.model, modelYear: s.vehicle.modelYear, color: s.vehicle.color, plateNumber: s.vehicle.plateNumber },
-          owner: s.vehicle.ownerPartnerId ? { id: s.vehicle.ownerPartnerId, name: owners.get(s.vehicle.ownerPartnerId) ?? '' } : null,
-          status: s.status,
-          conditionStatus: s.conditionStatus,
-          holdFlag: s.holdFlag,
-          holdReason: s.holdReason,
-          odometerKm: s.odometerKm,
-          fuelOrBatteryPct: s.fuelOrBatteryPct,
-          keyTag: s.keyTag,
-          position: { location: loc ? { id: loc.id, code: loc.code, type: loc.locationType } : null, kind: o?.kind ?? null, source: o?.positionSource ?? null, confirmedAt: o ? (o.occupiedAt ?? o.startedAt).toISOString() : null },
+          id: stay.id,
+          siteId: stay.siteId,
+          vehicle: { id: stay.vehicle.id, vin: stay.vehicle.vin, make: stay.vehicle.make, model: stay.vehicle.model, modelYear: stay.vehicle.modelYear, color: stay.vehicle.color, plateNumber: stay.vehicle.plateNumber },
+          owner: stay.vehicle.ownerPartnerId ? { id: stay.vehicle.ownerPartnerId, name: owners.get(stay.vehicle.ownerPartnerId) ?? '' } : null,
+          status: stay.status,
+          conditionStatus: stay.conditionStatus,
+          holdFlag: stay.holdFlag,
+          holdReason: stay.holdReason,
+          odometerKm: stay.odometerKm,
+          fuelOrBatteryPct: stay.fuelOrBatteryPct,
+          keyTag: stay.keyTag,
+          position: { location: loc ? { id: loc.id, code: loc.code, type: loc.locationType } : null, kind: occupancy?.kind ?? null, source: occupancy?.positionSource ?? null, confirmedAt: occupancy ? (occupancy.occupiedAt ?? occupancy.startedAt).toISOString() : null },
           releaseRequest: req ? { id: req.id, status: req.status, reason: req.reason, recipientName: req.recipientName, requestedBy: users.get(req.requestedById) ?? '', version: req.version } : null,
-          expectedAt: iso(s.expectedAt),
-          receivedAt: iso(s.receivedAt),
-          storedAt: iso(s.storedAt),
-          releasedAt: iso(s.releasedAt),
-          exitedAt: iso(s.exitedAt),
+          expectedAt: iso(stay.expectedAt),
+          receivedAt: iso(stay.receivedAt),
+          storedAt: iso(stay.storedAt),
+          releasedAt: iso(stay.releasedAt),
+          exitedAt: iso(stay.exitedAt),
           openTask: task ? { id: task.id, code: task.code, status: task.status, toCode: task.toLocationId ? (locs.get(task.toLocationId)?.code ?? null) : null } : null,
-          version: s.version,
+          version: stay.version,
         };
       });
   }
@@ -463,21 +463,21 @@ export class VehiclesService implements OnModuleInit {
     const vehicle = await this.prisma.storedVehicle.findUnique({ where: { vin: vin.toUpperCase() } });
     if (!vehicle) throw DomainError.notFound('Vehicle');
     const stays = await this.prisma.vehicleStay.findMany({ where: { vehicleId: vehicle.id, siteId: { in: allowedSiteIds } } });
-    const audit = await this.prisma.auditLog.findMany({ where: { entityType: 'VehicleStay', entityId: { in: stays.map((s) => s.id) } }, orderBy: { occurredAt: 'desc' } });
-    const moves = await this.prisma.movementRecord.findMany({ where: { subjectType: 'VEHICLE_STAY', subjectId: { in: stays.map((s) => s.id) } } });
-    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: moves.flatMap((m) => [m.fromLocationId, m.toLocationId]).filter((x): x is string => !!x) } } })).map((l) => [l.id, l.code]));
-    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: [...audit.map((a) => a.actorId), ...moves.map((m) => m.actorId)].filter((x): x is string => !!x) } } })).map((u) => [u.id, u.fullName]));
-    const sites = new Map((await this.prisma.site.findMany({ where: { id: { in: stays.map((s) => s.siteId) } } })).map((s) => [s.id, s.code]));
-    const siteOf = new Map(stays.map((s) => [s.id, sites.get(s.siteId) ?? null]));
+    const audit = await this.prisma.auditLog.findMany({ where: { entityType: 'VehicleStay', entityId: { in: stays.map((stay) => stay.id) } }, orderBy: { occurredAt: 'desc' } });
+    const moves = await this.prisma.movementRecord.findMany({ where: { subjectType: 'VEHICLE_STAY', subjectId: { in: stays.map((stay) => stay.id) } } });
+    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: moves.flatMap((move) => [move.fromLocationId, move.toLocationId]).filter((locationId): locationId is string => !!locationId) } } })).map((location) => [location.id, location.code]));
+    const users = new Map((await this.prisma.user.findMany({ where: { id: { in: [...audit.map((auditEntry) => auditEntry.actorId), ...moves.map((move) => move.actorId)].filter((actorId): actorId is string => !!actorId) } } })).map((user) => [user.id, user.fullName]));
+    const sites = new Map((await this.prisma.site.findMany({ where: { id: { in: stays.map((stay) => stay.siteId) } } })).map((site) => [site.id, site.code]));
+    const siteOf = new Map(stays.map((stay) => [stay.id, sites.get(stay.siteId) ?? null]));
     return [
-      ...audit.map((a) => ({ at: a.occurredAt.toISOString(), action: a.action, detail: a.reason, actor: a.actorId ? (users.get(a.actorId) ?? null) : 'System', site: siteOf.get(a.entityId) ?? null })),
-      ...moves.map((m) => ({
-        at: m.occurredAt.toISOString(),
+      ...audit.map((auditEntry) => ({ at: auditEntry.occurredAt.toISOString(), action: auditEntry.action, detail: auditEntry.reason, actor: auditEntry.actorId ? (users.get(auditEntry.actorId) ?? null) : 'System', site: siteOf.get(auditEntry.entityId) ?? null })),
+      ...moves.map((move) => ({
+        at: move.occurredAt.toISOString(),
         action: 'MOVEMENT',
-        detail: [m.fromLocationId ? locs.get(m.fromLocationId) : null, m.toLocationId ? locs.get(m.toLocationId) : 'exit'].filter(Boolean).join(' → '),
-        actor: m.actorId ? (users.get(m.actorId) ?? null) : 'System',
-        site: siteOf.get(m.subjectId) ?? null,
+        detail: [move.fromLocationId ? locs.get(move.fromLocationId) : null, move.toLocationId ? locs.get(move.toLocationId) : 'exit'].filter(Boolean).join(' → '),
+        actor: move.actorId ? (users.get(move.actorId) ?? null) : 'System',
+        site: siteOf.get(move.subjectId) ?? null,
       })),
-    ].sort((a, b) => b.at.localeCompare(a.at));
+    ].sort((left, right) => right.at.localeCompare(left.at));
   }
 }

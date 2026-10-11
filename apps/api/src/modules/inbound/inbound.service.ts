@@ -18,7 +18,7 @@ import { ShipmentsService } from '../shipments/shipments.service';
 import { SitesService } from '../sites/sites.service';
 import { VisitsService } from '../yard/visits.service';
 
-const D = Prisma.Decimal;
+const Decimal = Prisma.Decimal;
 
 /** Inbound: đơn nhập, nhận hàng theo từng lần quét, sai lệch, QC, put-away (UC-08, UC-09, UC-10). */
 @Injectable()
@@ -86,7 +86,7 @@ export class InboundService implements OnModuleInit {
           supplierId: body.supplierId ?? null,
           status: 'CONFIRMED',
           expectedOn: body.expectedOn ? new Date(body.expectedOn) : null,
-          lines: { create: body.lines.map((l) => ({ siteId, skuId: l.skuId, expectedQty: new D(l.expectedQty), expectedHuCount: l.expectedHuCount ?? null, expectedLotNumber: l.expectedLotNumber ?? null })) },
+          lines: { create: body.lines.map((line) => ({ siteId, skuId: line.skuId, expectedQty: new Decimal(line.expectedQty), expectedHuCount: line.expectedHuCount ?? null, expectedLotNumber: line.expectedLotNumber ?? null })) },
         },
       });
       const arrived = visit && !['SCHEDULED'].includes(visit.status);
@@ -98,7 +98,7 @@ export class InboundService implements OnModuleInit {
         carrierId: visit?.truck.carrierId ?? null,
         truckVisitId: visit?.id ?? null,
         etaAt: body.etaAt ? new Date(body.etaAt) : (visit?.etaAt ?? visit?.appointmentStart ?? null),
-        expectedHuCount: body.lines.reduce((s, l) => s + (l.expectedHuCount ?? 0), 0),
+        expectedHuCount: body.lines.reduce((sum, line) => sum + (line.expectedHuCount ?? 0), 0),
       });
       if (arrived) await this.shipments.transition(tx, shipment, 'ARRIVED', { arrivedAt: visit!.arrivedAt ?? new Date() });
       await tx.inboundOrder.update({ where: { id: order.id }, data: { shipmentId: shipment.id } });
@@ -110,39 +110,39 @@ export class InboundService implements OnModuleInit {
 
   async listOrders(siteId: string): Promise<InboundOrderDetail[]> {
     const rows = await this.prisma.inboundOrder.findMany({ where: { siteId }, orderBy: { createdAt: 'desc' }, take: 100 });
-    return Promise.all(rows.map((r) => this.getOrder(siteId, r.id)));
+    return Promise.all(rows.map((order) => this.getOrder(siteId, order.id)));
   }
 
   async getOrder(siteId: string, id: string): Promise<InboundOrderDetail> {
-    const o = await this.prisma.inboundOrder.findFirst({ where: { id, siteId }, include: { lines: true } });
-    if (!o) throw DomainError.notFound('Inbound order');
+    const order = await this.prisma.inboundOrder.findFirst({ where: { id, siteId }, include: { lines: true } });
+    if (!order) throw DomainError.notFound('Inbound order');
     const [supplier, shipment, skus, receipt] = await Promise.all([
-      o.supplierId ? this.prisma.partner.findUnique({ where: { id: o.supplierId } }) : null,
-      o.shipmentId ? this.prisma.shipment.findUnique({ where: { id: o.shipmentId } }) : null,
-      this.prisma.sku.findMany({ where: { id: { in: o.lines.map((l) => l.skuId) } } }),
-      this.prisma.receipt.findFirst({ where: { inboundOrderId: o.id }, orderBy: { startedAt: 'desc' } }),
+      order.supplierId ? this.prisma.partner.findUnique({ where: { id: order.supplierId } }) : null,
+      order.shipmentId ? this.prisma.shipment.findUnique({ where: { id: order.shipmentId } }) : null,
+      this.prisma.sku.findMany({ where: { id: { in: order.lines.map((line) => line.skuId) } } }),
+      this.prisma.receipt.findFirst({ where: { inboundOrderId: order.id }, orderBy: { startedAt: 'desc' } }),
     ]);
-    const ms = new Map(skus.map((s) => [s.id, s]));
+    const ms = new Map(skus.map((sku) => [sku.id, sku]));
     return {
-      id: o.id,
-      code: o.code,
-      status: o.status,
+      id: order.id,
+      code: order.code,
+      status: order.status,
       supplier: supplier ? { id: supplier.id, name: supplier.name } : null,
-      expectedOn: o.expectedOn?.toISOString().slice(0, 10) ?? null,
+      expectedOn: order.expectedOn?.toISOString().slice(0, 10) ?? null,
       shipment: shipment ? { id: shipment.id, code: shipment.code, status: shipment.status, visitId: shipment.truckVisitId } : null,
-      lines: o.lines.map((l) => {
-        const s = ms.get(l.skuId)!;
+      lines: order.lines.map((line) => {
+        const sku = ms.get(line.skuId)!;
         return {
-          id: l.id,
-          sku: { id: s.id, code: s.code, name: s.name, lotTracked: s.lotTracked, qcRequired: s.qcRequired },
-          expectedQty: new D(l.expectedQty).toFixed(3),
-          expectedHuCount: l.expectedHuCount,
-          expectedLotNumber: l.expectedLotNumber,
-          receivedQty: new D(l.receivedQty).toFixed(3),
+          id: line.id,
+          sku: { id: sku.id, code: sku.code, name: sku.name, lotTracked: sku.lotTracked, qcRequired: sku.qcRequired },
+          expectedQty: new Decimal(line.expectedQty).toFixed(3),
+          expectedHuCount: line.expectedHuCount,
+          expectedLotNumber: line.expectedLotNumber,
+          receivedQty: new Decimal(line.receivedQty).toFixed(3),
         };
       }),
       receipt: receipt ? { id: receipt.id, code: receipt.code, status: receipt.status } : null,
-      version: o.version,
+      version: order.version,
     };
   }
 
@@ -181,14 +181,14 @@ export class InboundService implements OnModuleInit {
   /** UC-08 bước 2–4: một lần quét = một pallet nhận vào dock (ledger RECEIPT). */
   async scanLine(siteId: string, receiptId: string, body: ReceiptLineRequest, idemKey: string): Promise<ReceiptDetail> {
     await this.tx.run(async (tx) => {
-      const r = await tx.receipt.findFirst({ where: { id: receiptId, siteId } });
-      if (!r) throw DomainError.notFound('Receipt');
-      if (r.status !== 'IN_PROGRESS') throw DomainError.invalidTransition('Receipt', r.status, 'IN_PROGRESS');
+      const receipt = await tx.receipt.findFirst({ where: { id: receiptId, siteId } });
+      if (!receipt) throw DomainError.notFound('Receipt');
+      if (receipt.status !== 'IN_PROGRESS') throw DomainError.invalidTransition('Receipt', receipt.status, 'IN_PROGRESS');
       const existing = await tx.receiptLine.findUnique({ where: { idempotencyKey: `rl:${idemKey}` } });
       if (existing) return;
       const sku = await tx.sku.findUnique({ where: { id: body.skuId } });
       if (!sku) throw DomainError.notFound('SKU');
-      const orderLine = await tx.inboundOrderLine.findFirst({ where: { inboundOrderId: r.inboundOrderId, skuId: sku.id } });
+      const orderLine = await tx.inboundOrderLine.findFirst({ where: { inboundOrderId: receipt.inboundOrderId, skuId: sku.id } });
       if (!orderLine) throw DomainError.rule(ErrorCode.SKU_NOT_IN_ORDER, `${sku.code} is not on this inbound order (UC-08 E1)`);
       let lotId: string | null = null;
       if (sku.lotTracked) {
@@ -206,7 +206,7 @@ export class InboundService implements OnModuleInit {
         throw DomainError.conflict(ErrorCode.CODE_ALREADY_EXISTS, `Pallet ${body.huCode} already exists`);
       }
       const status = body.condition === 'DAMAGED' ? 'DAMAGED' : sku.qcRequired ? 'QC_HOLD' : 'AVAILABLE';
-      const hu = await this.pallets.create(tx, siteId, { code: body.huCode, locationId: r.dockLocationId, source: 'CONFIRMED_SCAN' });
+      const hu = await this.pallets.create(tx, siteId, { code: body.huCode, locationId: receipt.dockLocationId, source: 'CONFIRMED_SCAN' });
       const posted = await this.ledger.post(tx, {
         siteId,
         txType: 'RECEIPT',
@@ -214,24 +214,24 @@ export class InboundService implements OnModuleInit {
         skuId: sku.id,
         lotId,
         handlingUnitId: hu.id,
-        toLocationId: r.dockLocationId,
+        toLocationId: receipt.dockLocationId,
         toStatus: status,
         quantity: body.quantity,
         referenceType: 'RECEIPT_LINE',
-        referenceId: r.id,
+        referenceId: receipt.id,
       });
       await tx.receiptLine.create({
-        data: { receiptId: r.id, siteId, inboundOrderLineId: orderLine.id, skuId: sku.id, lotId, handlingUnitId: hu.id, quantity: new D(body.quantity), stockStatus: status, idempotencyKey: `rl:${idemKey}`, inventoryTxId: posted.tx.id },
+        data: { receiptId: receipt.id, siteId, inboundOrderLineId: orderLine.id, skuId: sku.id, lotId, handlingUnitId: hu.id, quantity: new Decimal(body.quantity), stockStatus: status, idempotencyKey: `rl:${idemKey}`, inventoryTxId: posted.tx.id },
       });
-      await tx.inboundOrderLine.update({ where: { id: orderLine.id }, data: { receivedQty: { increment: new D(body.quantity) } } });
-      await this.movements.record(tx, { siteId, subjectType: 'HANDLING_UNIT', subjectId: hu.id, fromLocationId: null, toLocationId: r.dockLocationId, positionSource: 'CONFIRMED_SCAN', reason: 'Received' });
+      await tx.inboundOrderLine.update({ where: { id: orderLine.id }, data: { receivedQty: { increment: new Decimal(body.quantity) } } });
+      await this.movements.record(tx, { siteId, subjectType: 'HANDLING_UNIT', subjectId: hu.id, fromLocationId: null, toLocationId: receipt.dockLocationId, positionSource: 'CONFIRMED_SCAN', reason: 'Received' });
       if (body.condition === 'DAMAGED') {
         await this.exceptions.raise(tx, { siteId, caseType: 'RECEIPT_DISCREPANCY', subjectType: 'HANDLING_UNIT', subjectId: hu.id, description: `Damaged on arrival: ${hu.code} ${sku.code} × ${body.quantity}` });
       }
-      await this.audit.record(tx, { siteId, action: 'RECEIPT_LINE_SCANNED', entityType: 'Receipt', entityId: r.id, diff: { after: { hu: hu.code, sku: sku.code, qty: body.quantity, status } } });
+      await this.audit.record(tx, { siteId, action: 'RECEIPT_LINE_SCANNED', entityType: 'Receipt', entityId: receipt.id, diff: { after: { hu: hu.code, sku: sku.code, qty: body.quantity, status } } });
       await this.events.inventoryUpdated(tx, siteId, posted.changes, [posted.tx.id]);
-      await this.events.palletMoved(tx, siteId, hu.id, null, r.dockLocationId);
-      await this.shipments.emit(tx, r.shipmentId);
+      await this.events.palletMoved(tx, siteId, hu.id, null, receipt.dockLocationId);
+      await this.shipments.emit(tx, receipt.shipmentId);
     });
     return this.getReceipt(siteId, receiptId);
   }
@@ -275,103 +275,103 @@ export class InboundService implements OnModuleInit {
   async completeReceipt(siteId: string, receiptId: string, closeShortReason?: string): Promise<ReceiptDetail> {
     const principal = requirePrincipal();
     await this.tx.run(async (tx) => {
-      const r = await tx.receipt.findFirst({ where: { id: receiptId, siteId } });
-      if (!r) throw DomainError.notFound('Receipt');
-      if (r.status !== 'IN_PROGRESS') throw DomainError.invalidTransition('Receipt', r.status, 'COMPLETED');
-      const order = await tx.inboundOrder.findUniqueOrThrow({ where: { id: r.inboundOrderId }, include: { lines: true } });
+      const receipt = await tx.receipt.findFirst({ where: { id: receiptId, siteId } });
+      if (!receipt) throw DomainError.notFound('Receipt');
+      if (receipt.status !== 'IN_PROGRESS') throw DomainError.invalidTransition('Receipt', receipt.status, 'COMPLETED');
+      const order = await tx.inboundOrder.findUniqueOrThrow({ where: { id: receipt.inboundOrderId }, include: { lines: true } });
       const settings = await this.sites.settings(siteId, tx);
-      const shortLines = order.lines.filter((l) => new D(l.receivedQty).lt(l.expectedQty));
+      const shortLines = order.lines.filter((line) => new Decimal(line.receivedQty).lt(line.expectedQty));
       if (shortLines.length > 0 && (!closeShortReason || !principal.permissions.has('inbound.discrepancy.approve'))) {
         throw DomainError.rule(ErrorCode.DISCREPANCY_APPROVAL_REQUIRED, 'Short receipt — a supervisor must close it with a reason (UC-08 A1)', {
-          short: shortLines.map((l) => ({ lineId: l.id, expected: new D(l.expectedQty).toFixed(3), received: new D(l.receivedQty).toFixed(3) })),
+          short: shortLines.map((line) => ({ lineId: line.id, expected: new Decimal(line.expectedQty).toFixed(3), received: new Decimal(line.receivedQty).toFixed(3) })),
         });
       }
-      for (const l of order.lines) {
-        const delta = new D(l.receivedQty).minus(l.expectedQty);
+      for (const line of order.lines) {
+        const delta = new Decimal(line.receivedQty).minus(line.expectedQty);
         if (delta.isZero()) continue;
         const over = delta.gt(0);
-        const tolerance = new D(l.expectedQty).times(settings.overReceiptTolerancePct).div(100);
+        const tolerance = new Decimal(line.expectedQty).times(settings.overReceiptTolerancePct).div(100);
         const needsApproval = over && delta.gt(tolerance); // BR-36, DEC-15
         const exc = await this.exceptions.raise(tx, {
           siteId,
           caseType: 'RECEIPT_DISCREPANCY',
           severity: over ? 'MEDIUM' : 'LOW',
           subjectType: 'RECEIPT',
-          subjectId: r.id,
+          subjectId: receipt.id,
           description: `${over ? 'Over' : 'Short'} receipt ${delta.toFixed(3)} on ${order.code}${!over && closeShortReason ? ` — ${closeShortReason}` : ''}`,
         });
         await tx.receiptDiscrepancy.create({
-          data: { receiptId: r.id, siteId, discrepancyType: over ? 'OVER' : 'SHORT', skuId: l.skuId, qtyDelta: delta, status: needsApproval ? 'PENDING_APPROVAL' : 'APPROVED', note: over ? null : closeShortReason, exceptionCaseId: exc.id },
+          data: { receiptId: receipt.id, siteId, discrepancyType: over ? 'OVER' : 'SHORT', skuId: line.skuId, qtyDelta: delta, status: needsApproval ? 'PENDING_APPROVAL' : 'APPROVED', note: over ? null : closeShortReason, exceptionCaseId: exc.id },
         });
       }
-      const pending = await tx.receiptDiscrepancy.count({ where: { receiptId: r.id, status: { in: ['OPEN', 'PENDING_APPROVAL'] } } });
-      await tx.receipt.update({ where: { id: r.id }, data: { status: shortLines.length ? 'PARTIALLY_RECEIVED' : 'COMPLETED', completedAt: new Date(), version: { increment: 1 } } });
-      const shipment = await this.shipments.load(tx, siteId, r.shipmentId);
+      const pending = await tx.receiptDiscrepancy.count({ where: { receiptId: receipt.id, status: { in: ['OPEN', 'PENDING_APPROVAL'] } } });
+      await tx.receipt.update({ where: { id: receipt.id }, data: { status: shortLines.length ? 'PARTIALLY_RECEIVED' : 'COMPLETED', completedAt: new Date(), version: { increment: 1 } } });
+      const shipment = await this.shipments.load(tx, siteId, receipt.shipmentId);
       await this.shipments.transition(tx, shipment, 'RECEIVED');
-      if (pending === 0) await this.shipments.transition(tx, await this.shipments.load(tx, siteId, r.shipmentId), 'CLOSED');
+      if (pending === 0) await this.shipments.transition(tx, await this.shipments.load(tx, siteId, receipt.shipmentId), 'CLOSED');
       await tx.inboundOrder.update({ where: { id: order.id }, data: { status: pending === 0 ? 'CLOSED' : 'RECEIVED', version: { increment: 1 } } });
       if (shipment.truckVisitId) await this.visits.markHandlingComplete(tx, siteId, shipment.truckVisitId);
 
       // Sinh put-away cho pallet AVAILABLE; pallet QC_HOLD chờ QC (hàng đợi QC = pallet QC_HOLD)
-      const lines = await tx.receiptLine.findMany({ where: { receiptId: r.id, voided: false } });
-      for (const line of lines) if (line.stockStatus === 'AVAILABLE') await this.createPutaway(tx, siteId, line.handlingUnitId, r.code);
-      await this.audit.record(tx, { siteId, action: 'RECEIPT_COMPLETED', entityType: 'Receipt', entityId: r.id, reason: closeShortReason ?? null });
+      const lines = await tx.receiptLine.findMany({ where: { receiptId: receipt.id, voided: false } });
+      for (const line of lines) if (line.stockStatus === 'AVAILABLE') await this.createPutaway(tx, siteId, line.handlingUnitId, receipt.code);
+      await this.audit.record(tx, { siteId, action: 'RECEIPT_COMPLETED', entityType: 'Receipt', entityId: receipt.id, reason: closeShortReason ?? null });
     });
     return this.getReceipt(siteId, receiptId);
   }
 
   async decideDiscrepancy(siteId: string, receiptId: string, discId: string, approve: boolean, note?: string): Promise<ReceiptDetail> {
     await this.tx.run(async (tx) => {
-      const d = await tx.receiptDiscrepancy.findFirst({ where: { id: discId, receiptId, siteId } });
-      if (!d) throw DomainError.notFound('Discrepancy');
-      if (d.status !== 'PENDING_APPROVAL') throw DomainError.invalidTransition('ReceiptDiscrepancy', d.status, approve ? 'APPROVED' : 'REJECTED');
-      await tx.receiptDiscrepancy.update({ where: { id: d.id }, data: { status: approve ? 'APPROVED' : 'REJECTED', note: note ?? d.note } });
-      await this.audit.record(tx, { siteId, action: approve ? 'OVER_RECEIPT_APPROVED' : 'OVER_RECEIPT_REJECTED', entityType: 'ReceiptDiscrepancy', entityId: d.id, reason: note ?? null });
+      const discrepancy = await tx.receiptDiscrepancy.findFirst({ where: { id: discId, receiptId, siteId } });
+      if (!discrepancy) throw DomainError.notFound('Discrepancy');
+      if (discrepancy.status !== 'PENDING_APPROVAL') throw DomainError.invalidTransition('ReceiptDiscrepancy', discrepancy.status, approve ? 'APPROVED' : 'REJECTED');
+      await tx.receiptDiscrepancy.update({ where: { id: discrepancy.id }, data: { status: approve ? 'APPROVED' : 'REJECTED', note: note ?? discrepancy.note } });
+      await this.audit.record(tx, { siteId, action: approve ? 'OVER_RECEIPT_APPROVED' : 'OVER_RECEIPT_REJECTED', entityType: 'ReceiptDiscrepancy', entityId: discrepancy.id, reason: note ?? null });
       const pending = await tx.receiptDiscrepancy.count({ where: { receiptId, status: { in: ['OPEN', 'PENDING_APPROVAL'] } } });
       if (pending === 0) {
-        const r = await tx.receipt.findUniqueOrThrow({ where: { id: receiptId } });
-        const s = await this.shipments.load(tx, siteId, r.shipmentId);
-        if (s.status === 'RECEIVED') await this.shipments.transition(tx, s, 'CLOSED');
-        await tx.inboundOrder.update({ where: { id: r.inboundOrderId }, data: { status: 'CLOSED', version: { increment: 1 } } });
+        const receipt = await tx.receipt.findUniqueOrThrow({ where: { id: receiptId } });
+        const shipment = await this.shipments.load(tx, siteId, receipt.shipmentId);
+        if (shipment.status === 'RECEIVED') await this.shipments.transition(tx, shipment, 'CLOSED');
+        await tx.inboundOrder.update({ where: { id: receipt.inboundOrderId }, data: { status: 'CLOSED', version: { increment: 1 } } });
       }
     });
     return this.getReceipt(siteId, receiptId);
   }
 
   async getReceipt(siteId: string, id: string): Promise<ReceiptDetail> {
-    const r = await this.prisma.receipt.findFirst({ where: { id, siteId }, include: { lines: { orderBy: { createdAt: 'asc' } } } });
-    if (!r) throw DomainError.notFound('Receipt');
+    const receipt = await this.prisma.receipt.findFirst({ where: { id, siteId }, include: { lines: { orderBy: { createdAt: 'asc' } } } });
+    if (!receipt) throw DomainError.notFound('Receipt');
     const [dock, skus, lots, hus, discs, shipment] = await Promise.all([
-      this.prisma.location.findUniqueOrThrow({ where: { id: r.dockLocationId } }),
-      this.prisma.sku.findMany({ where: { id: { in: r.lines.map((l) => l.skuId) } } }),
-      this.prisma.lot.findMany({ where: { id: { in: r.lines.map((l) => l.lotId).filter((x): x is string => !!x) } } }),
-      this.prisma.handlingUnit.findMany({ where: { id: { in: r.lines.map((l) => l.handlingUnitId) } } }),
-      this.prisma.receiptDiscrepancy.findMany({ where: { receiptId: r.id } }),
-      this.prisma.shipment.findUniqueOrThrow({ where: { id: r.shipmentId } }),
+      this.prisma.location.findUniqueOrThrow({ where: { id: receipt.dockLocationId } }),
+      this.prisma.sku.findMany({ where: { id: { in: receipt.lines.map((line) => line.skuId) } } }),
+      this.prisma.lot.findMany({ where: { id: { in: receipt.lines.map((line) => line.lotId).filter((lotId): lotId is string => !!lotId) } } }),
+      this.prisma.handlingUnit.findMany({ where: { id: { in: receipt.lines.map((line) => line.handlingUnitId) } } }),
+      this.prisma.receiptDiscrepancy.findMany({ where: { receiptId: receipt.id } }),
+      this.prisma.shipment.findUniqueOrThrow({ where: { id: receipt.shipmentId } }),
     ]);
-    const ms = new Map(skus.map((s) => [s.id, s])), ml = new Map(lots.map((l) => [l.id, l.lotNumber])), mh = new Map(hus.map((h) => [h.id, h.code]));
-    const dSkus = new Map((await this.prisma.sku.findMany({ where: { id: { in: discs.map((d) => d.skuId).filter((x): x is string => !!x) } } })).map((s) => [s.id, s.code]));
-    const received = r.lines.filter((l) => !l.voided).length;
+    const ms = new Map(skus.map((sku) => [sku.id, sku])), ml = new Map(lots.map((lot) => [lot.id, lot.lotNumber])), mh = new Map(hus.map((handlingUnit) => [handlingUnit.id, handlingUnit.code]));
+    const dSkus = new Map((await this.prisma.sku.findMany({ where: { id: { in: discs.map((discrepancy) => discrepancy.skuId).filter((skuId): skuId is string => !!skuId) } } })).map((sku) => [sku.id, sku.code]));
+    const received = receipt.lines.filter((line) => !line.voided).length;
     return {
-      id: r.id,
-      code: r.code,
-      status: r.status,
-      inboundOrderId: r.inboundOrderId,
-      shipmentId: r.shipmentId,
+      id: receipt.id,
+      code: receipt.code,
+      status: receipt.status,
+      inboundOrderId: receipt.inboundOrderId,
+      shipmentId: receipt.shipmentId,
       dock: { id: dock.id, code: dock.code },
-      lines: r.lines.map((l) => ({
-        id: l.id,
-        sku: { code: ms.get(l.skuId)?.code ?? '', name: ms.get(l.skuId)?.name ?? '' },
-        lotNumber: l.lotId ? (ml.get(l.lotId) ?? null) : null,
-        handlingUnit: { id: l.handlingUnitId, code: mh.get(l.handlingUnitId) ?? '' },
-        quantity: new D(l.quantity).toFixed(3),
-        stockStatus: l.stockStatus,
-        voided: l.voided,
-        createdAt: l.createdAt.toISOString(),
+      lines: receipt.lines.map((line) => ({
+        id: line.id,
+        sku: { code: ms.get(line.skuId)?.code ?? '', name: ms.get(line.skuId)?.name ?? '' },
+        lotNumber: line.lotId ? (ml.get(line.lotId) ?? null) : null,
+        handlingUnit: { id: line.handlingUnitId, code: mh.get(line.handlingUnitId) ?? '' },
+        quantity: new Decimal(line.quantity).toFixed(3),
+        stockStatus: line.stockStatus,
+        voided: line.voided,
+        createdAt: line.createdAt.toISOString(),
       })),
       progress: { receivedHu: received, expectedHu: Math.max(shipment.expectedHuCount, received) },
-      discrepancies: discs.map((d) => ({ id: d.id, type: d.discrepancyType, sku: d.skuId ? (dSkus.get(d.skuId) ?? null) : null, qtyDelta: new D(d.qtyDelta).toFixed(3), status: d.status, note: d.note })),
-      version: r.version,
+      discrepancies: discs.map((discrepancy) => ({ id: discrepancy.id, type: discrepancy.discrepancyType, sku: discrepancy.skuId ? (dSkus.get(discrepancy.skuId) ?? null) : null, qtyDelta: new Decimal(discrepancy.qtyDelta).toFixed(3), status: discrepancy.status, note: discrepancy.note })),
+      version: receipt.version,
     };
   }
 
@@ -379,16 +379,16 @@ export class InboundService implements OnModuleInit {
 
   async qcQueue(siteId: string) {
     const balances = await this.prisma.inventoryBalance.findMany({ where: { siteId, stockStatus: 'QC_HOLD', qtyOnHand: { gt: 0 }, handlingUnitId: { not: null } } });
-    const hus = await this.prisma.handlingUnit.findMany({ where: { id: { in: balances.map((b) => b.handlingUnitId!) } } });
-    const skus = new Map((await this.prisma.sku.findMany({ where: { id: { in: balances.map((b) => b.skuId) } } })).map((s) => [s.id, s]));
-    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: balances.map((b) => b.locationId) } } })).map((l) => [l.id, l.code]));
-    return balances.map((b) => ({
-      balanceId: b.id,
-      handlingUnit: { id: b.handlingUnitId!, code: hus.find((h) => h.id === b.handlingUnitId)?.code ?? '' },
-      sku: { code: skus.get(b.skuId)?.code ?? '', name: skus.get(b.skuId)?.name ?? '' },
-      location: locs.get(b.locationId) ?? '',
-      quantity: new D(b.qtyOnHand).toFixed(3),
-      receivedAt: b.receivedAt.toISOString(),
+    const hus = await this.prisma.handlingUnit.findMany({ where: { id: { in: balances.map((balance) => balance.handlingUnitId!) } } });
+    const skus = new Map((await this.prisma.sku.findMany({ where: { id: { in: balances.map((balance) => balance.skuId) } } })).map((sku) => [sku.id, sku]));
+    const locs = new Map((await this.prisma.location.findMany({ where: { id: { in: balances.map((balance) => balance.locationId) } } })).map((location) => [location.id, location.code]));
+    return balances.map((balance) => ({
+      balanceId: balance.id,
+      handlingUnit: { id: balance.handlingUnitId!, code: hus.find((handlingUnit) => handlingUnit.id === balance.handlingUnitId)?.code ?? '' },
+      sku: { code: skus.get(balance.skuId)?.code ?? '', name: skus.get(balance.skuId)?.name ?? '' },
+      location: locs.get(balance.locationId) ?? '',
+      quantity: new Decimal(balance.qtyOnHand).toFixed(3),
+      receivedAt: balance.receivedAt.toISOString(),
     }));
   }
 
@@ -399,15 +399,15 @@ export class InboundService implements OnModuleInit {
       if (!hu) throw DomainError.notFound('Pallet');
       const balances = await tx.inventoryBalance.findMany({ where: { handlingUnitId: hu.id, stockStatus: 'QC_HOLD', qtyOnHand: { gt: 0 } } });
       if (balances.length === 0) throw DomainError.invalidTransition('Stock', 'NOT_QC_HOLD', 'QC');
-      const total = balances.reduce((s, b) => s.plus(b.qtyOnHand), new D(0));
-      const failed = body.result === 'PASS' ? new D(0) : body.result === 'FAIL' ? total : new D(body.qtyFailed ?? 0);
+      const total = balances.reduce((sum, balance) => sum.plus(balance.qtyOnHand), new Decimal(0));
+      const failed = body.result === 'PASS' ? new Decimal(0) : body.result === 'FAIL' ? total : new Decimal(body.qtyFailed ?? 0);
       if (failed.gt(total) || (body.result === 'PARTIAL' && (failed.lte(0) || failed.gte(total)))) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Failed quantity must be between 0 and the pallet quantity');
       const failStatus = body.failStatus ?? 'QUARANTINE';
       const changes = [];
       const txIds: bigint[] = [];
       let remainingFail = failed;
-      for (const [i, b] of balances.entries()) {
-        const qty = new D(b.qtyOnHand);
+      for (const [balanceIndex, balance] of balances.entries()) {
+        const qty = new Decimal(balance.qtyOnHand);
         const failHere = Prisma.Decimal.min(qty, remainingFail);
         remainingFail = remainingFail.minus(failHere);
         const passHere = qty.minus(failHere);
@@ -416,23 +416,23 @@ export class InboundService implements OnModuleInit {
           [failHere, failStatus],
         ] as const) {
           if (part.lte(0)) continue;
-          const r = await this.ledger.post(tx, {
+          const ledgerResult = await this.ledger.post(tx, {
             siteId,
             txType: 'STATUS_CHANGE',
-            idempotencyKey: `qc:${hu.id}:${b.id}:${to}:${i}`,
-            skuId: b.skuId,
-            lotId: b.lotId,
+            idempotencyKey: `qc:${hu.id}:${balance.id}:${to}:${balanceIndex}`,
+            skuId: balance.skuId,
+            lotId: balance.lotId,
             handlingUnitId: hu.id,
-            fromLocationId: b.locationId,
+            fromLocationId: balance.locationId,
             fromStatus: 'QC_HOLD',
             toStatus: to,
             quantity: part,
             referenceType: 'QC_INSPECTION',
             referenceId: hu.id,
-            receivedAt: b.receivedAt,
+            receivedAt: balance.receivedAt,
           });
-          changes.push(...r.changes);
-          txIds.push(r.tx.id);
+          changes.push(...ledgerResult.changes);
+          txIds.push(ledgerResult.tx.id);
         }
       }
       const qc = await tx.qcInspection.create({
@@ -457,11 +457,11 @@ export class InboundService implements OnModuleInit {
     if (!target) {
       const bal = await tx.inventoryBalance.findFirst({ where: { handlingUnitId: huId, qtyOnHand: { gt: 0 } } });
       const racks = await tx.location.findMany({ where: { siteId, locationType: 'STORAGE', deletedAt: null, isActive: true, blockedAt: null, frozenByCountId: null }, orderBy: { code: 'asc' } });
-      const occ = await tx.locationOccupancy.groupBy({ by: ['locationId'], where: { siteId, releasedAt: null, locationId: { in: racks.map((r) => r.id) } }, _sum: { unitsUsed: true } });
-      const used = new Map(occ.map((o) => [o.locationId, Number(o._sum.unitsUsed ?? 0)]));
-      const sameSku = bal ? new Set((await tx.inventoryBalance.findMany({ where: { siteId, skuId: bal.skuId, qtyOnHand: { gt: 0 }, locationId: { in: racks.map((r) => r.id) } } })).map((b) => b.locationId)) : new Set<string>();
-      const free = racks.filter((r) => (used.get(r.id) ?? 0) < Number(r.capacityUnits));
-      target = (free.find((r) => sameSku.has(r.id)) ?? free[0])?.id ?? null;
+      const occ = await tx.locationOccupancy.groupBy({ by: ['locationId'], where: { siteId, releasedAt: null, locationId: { in: racks.map((rack) => rack.id) } }, _sum: { unitsUsed: true } });
+      const used = new Map(occ.map((occupancy) => [occupancy.locationId, Number(occupancy._sum.unitsUsed ?? 0)]));
+      const sameSku = bal ? new Set((await tx.inventoryBalance.findMany({ where: { siteId, skuId: bal.skuId, qtyOnHand: { gt: 0 }, locationId: { in: racks.map((rack) => rack.id) } } })).map((balance) => balance.locationId)) : new Set<string>();
+      const free = racks.filter((rack) => (used.get(rack.id) ?? 0) < Number(rack.capacityUnits));
+      target = (free.find((rack) => sameSku.has(rack.id)) ?? free[0])?.id ?? null;
     }
     return this.tasks.create(tx, {
       siteId,

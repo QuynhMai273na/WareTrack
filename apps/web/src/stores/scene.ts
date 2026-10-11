@@ -35,9 +35,9 @@ export const useScene = create<SceneState>((set) => ({
   mode: '3d',
   cameraCommand: null,
   focusRequest: 0,
-  setSite: (siteId) => set((s) => (s.siteId === siteId ? s : { siteId, selection: null, hover: null })),
-  select: (selection) => set((s) => ({ selection, focusRequest: s.focusRequest + 1 })),
+  setSite: (siteId) => set((state) => (state.siteId === siteId ? state : { siteId, selection: null, hover: null })),
+  select: (selection) => set((state) => ({ selection, focusRequest: state.focusRequest + 1 })),
   setHover: (hover) => set({ hover }),
   setMode: (mode) => set({ mode }),
-  camera: (cmd) => set((s) => ({ cameraCommand: { cmd, n: (s.cameraCommand?.n ?? 0) + 1 } })),
+  camera: (cmd) => set((state) => ({ cameraCommand: { cmd, n: (state.cameraCommand?.n ?? 0) + 1 } })),
 }));

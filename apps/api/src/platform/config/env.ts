@@ -13,7 +13,12 @@ const EnvSchema = z.object({
   COOKIE_SECURE: z
     .string()
     .default('false')
-    .transform((v) => v === 'true'),
+    .transform((value) => value === 'true'),
+  /** Vận hành thật: tạo admin đầu tiên khi database chưa có user nào (không seed dữ liệu demo). */
+  BOOTSTRAP_ADMIN_USERNAME: z.string().regex(/^[a-z0-9._-]{3,40}$/).optional(),
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
+  BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
+  BOOTSTRAP_ADMIN_FULL_NAME: z.string().min(2).optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -25,7 +30,7 @@ export function env(): Env {
   if (!cached) {
     const parsed = EnvSchema.safeParse(process.env);
     if (!parsed.success) {
-      const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
       throw new Error(`Invalid environment: ${issues}`);
     }
     cached = parsed.data;
@@ -36,6 +41,6 @@ export function env(): Env {
 export function webOrigins(): string[] {
   return env()
     .WEB_ORIGIN.split(',')
-    .map((s) => s.trim())
+    .map((origin) => origin.trim())
     .filter(Boolean);
 }

@@ -4,10 +4,19 @@ import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router';
 import './i18n';
 import './index.css';
+import { useCanAdminister } from './features/admin/admin-access';
+import { AdminShell } from './features/admin/AdminShell';
+import { LayoutEditorPage } from './features/admin/LayoutEditorPage';
+import { MasterDataPage } from './features/admin/MasterDataPage';
+import { SiteEquipmentPage } from './features/admin/SiteEquipmentPage';
+import { SitesAdminPage } from './features/admin/SitesAdminPage';
+import { UsersAdminPage } from './features/admin/UsersAdminPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { ExceptionsPage } from './features/exceptions/ExceptionsPage';
 import { InventoryPage } from './features/inventory/InventoryPage';
+import { OpeningStockPage } from './features/inventory/OpeningStockPage';
+import { LabelsPage } from './features/labels/LabelsPage';
 import { InboundPage } from './features/inbound/InboundPage';
 import { OutboundPage } from './features/outbound/OutboundPage';
 import { TasksPage } from './features/tasks/TasksPage';
@@ -28,7 +37,7 @@ const queryClient = new QueryClient({
 });
 
 function RequireAuth({ children }: { children: ReactNode }) {
-  const status = useAuth((s) => s.status);
+  const status = useAuth((state) => state.status);
   if (status === 'unknown') return <div className="flex h-full items-center justify-center text-muted">Loading…</div>;
   if (status === 'anonymous') return <Navigate to="/login" replace />;
   return <>{children}</>;
@@ -42,13 +51,17 @@ export function defaultSiteCode(sites: Array<{ code: string }>): string | null {
   } catch {
     /* bỏ qua */
   }
-  return sites.find((s) => s.code === last)?.code ?? sites[0]?.code ?? null;
+  return sites.find((site) => site.code === last)?.code ?? sites[0]?.code ?? null;
 }
 
 function HomeRedirect() {
-  const me = useAuth((s) => s.me);
+  const me = useAuth((state) => state.me);
+  const canAdminister = useCanAdminister();
   const code = defaultSiteCode(me?.sites ?? []);
-  return code ? <Navigate to={`/sites/${code}`} replace /> : <div className="p-8 text-muted">No site access</div>;
+  if (code) return <Navigate to={`/sites/${code}`} replace />;
+  // Hệ thống mới (chưa có site) → admin vào thẳng khu quản trị để tạo site đầu tiên
+  if (canAdminister) return <Navigate to="/admin/sites" replace />;
+  return <div className="p-8 text-muted">No site access</div>;
 }
 
 const router = createBrowserRouter([
@@ -72,6 +85,8 @@ const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: 'yard', element: <YardPage /> },
       { path: 'inventory', element: <InventoryPage /> },
+      { path: 'inventory/import', element: <OpeningStockPage /> },
+      { path: 'labels', element: <LabelsPage /> },
       { path: 'inbound', element: <InboundPage /> },
       { path: 'outbound', element: <OutboundPage /> },
       { path: 'vehicles', element: <VehiclesPage /> },
@@ -79,12 +94,28 @@ const router = createBrowserRouter([
       { path: 'exceptions', element: <ExceptionsPage /> },
     ],
   },
+  {
+    path: '/admin',
+    element: (
+      <RequireAuth>
+        <AdminShell />
+      </RequireAuth>
+    ),
+    children: [
+      { index: true, element: <Navigate to="/admin/sites" replace /> },
+      { path: 'sites', element: <SitesAdminPage /> },
+      { path: 'sites/:siteCode/layout', element: <LayoutEditorPage /> },
+      { path: 'sites/:siteCode/equipment', element: <SiteEquipmentPage /> },
+      { path: 'users', element: <UsersAdminPage /> },
+      { path: 'master-data', element: <MasterDataPage /> },
+    ],
+  },
   { path: '*', element: <Navigate to="/" replace /> },
 ]);
 
 function App() {
-  const bootstrap = useAuth((s) => s.bootstrap);
-  const status = useAuth((s) => s.status);
+  const bootstrap = useAuth((state) => state.bootstrap);
+  const status = useAuth((state) => state.status);
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);

@@ -22,8 +22,8 @@ export function minutesFromNow(iso: string | null | undefined) {
 }
 
 export function relativeMinutes(iso: string | null | undefined) {
-  const m = minutesFromNow(iso);
-  if (m === null) return '—';
-  if (Math.abs(m) < 1) return 'now';
-  return m > 0 ? `${m} min` : `${-m} min ago`;
+  const minutes = minutesFromNow(iso);
+  if (minutes === null) return '—';
+  if (Math.abs(minutes) < 1) return 'now';
+  return minutes > 0 ? `${minutes} min` : `${-minutes} min ago`;
 }

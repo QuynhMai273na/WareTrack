@@ -15,12 +15,12 @@ import { KpiBar } from './KpiBar';
 import { OpsTable } from './OpsTable';
 import { Tracker } from './Tracker';
 
-const SiteScene = lazy(() => import('@/scene/SiteScene').then((m) => ({ default: m.SiteScene })));
+const SiteScene = lazy(() => import('@/scene/SiteScene').then((sceneModule) => ({ default: sceneModule.SiteScene })));
 
 function webglAvailable() {
   try {
-    const c = document.createElement('canvas');
-    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+    const canvas = document.createElement('canvas');
+    return !!(canvas.getContext('webgl2') || canvas.getContext('webgl'));
   } catch {
     return false;
   }
@@ -35,35 +35,35 @@ export function DashboardPage() {
   const { siteId, siteCode, timeZone } = useSiteContext();
   const { data: snapshot } = useSnapshot(siteId);
   const { data: layout, isError: noLayout } = useLayout(siteId);
-  const mode = useScene((s) => s.mode);
-  const setMode = useScene((s) => s.setMode);
+  const mode = useScene((state) => state.mode);
+  const setMode = useScene((state) => state.setMode);
   const [lowFps, setLowFps] = useState(false);
   const [params, setParams] = useSearchParams();
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const navigate = useNavigate();
   const { data: sites } = useSites();
 
   // Bản đồ chung: layout + snapshot của MỌI site (site đang xem cập nhật realtime, site khác làm mới định kỳ)
-  const others = (sites ?? []).filter((s) => s.siteType !== 'VEHICLE_YARD' || s.id === siteId);
-  const layoutQs = useQueries({ queries: others.map((s) => ({ queryKey: ['site', s.id, 'layout'], queryFn: () => api<PublishedLayout>(`/sites/${s.id}/layout`), staleTime: Infinity, retry: false })) });
+  const others = (sites ?? []).filter((otherSite) => otherSite.siteType !== 'VEHICLE_YARD' || otherSite.id === siteId);
+  const layoutQs = useQueries({ queries: others.map((otherSite) => ({ queryKey: ['site', otherSite.id, 'layout'], queryFn: () => api<PublishedLayout>(`/sites/${otherSite.id}/layout`), staleTime: Infinity, retry: false })) });
   const snapQs = useQueries({
-    queries: others.map((s) => ({ queryKey: ['site', s.id, 'snapshot'], queryFn: () => api<SiteSnapshot>(`/sites/${s.id}/snapshot`), staleTime: s.id === siteId ? Infinity : 15_000, refetchInterval: (s.id === siteId ? false : 20_000) as number | false })),
+    queries: others.map((otherSite) => ({ queryKey: ['site', otherSite.id, 'snapshot'], queryFn: () => api<SiteSnapshot>(`/sites/${otherSite.id}/snapshot`), staleTime: otherSite.id === siteId ? Infinity : 15_000, refetchInterval: (otherSite.id === siteId ? false : 20_000) as number | false })),
   });
   const network = useMemo(
     () =>
       others
-        .map((s, i) => ({ siteId: s.id, code: s.code, name: s.name, offset: s.map ?? { x: 0, z: 0 }, layout: layoutQs[i]?.data, snapshot: s.id === siteId ? snapshot : snapQs[i]?.data }))
-        .filter((n): n is typeof n & { layout: PublishedLayout } => !!n.layout),
+        .map((otherSite, siteIndex) => ({ siteId: otherSite.id, code: otherSite.code, name: otherSite.name, offset: otherSite.map ?? { x: 0, z: 0 }, layout: layoutQs[siteIndex]?.data, snapshot: otherSite.id === siteId ? snapshot : snapQs[siteIndex]?.data }))
+        .filter((networkSite): networkSite is typeof networkSite & { layout: PublishedLayout } => !!networkSite.layout),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [others.map((s) => s.id).join(), layoutQs.map((q) => q.dataUpdatedAt).join(), snapQs.map((q) => q.dataUpdatedAt).join(), snapshot, siteId],
+    [others.map((otherSite) => otherSite.id).join(), layoutQs.map((layoutQuery) => layoutQuery.dataUpdatedAt).join(), snapQs.map((snapshotQuery) => snapshotQuery.dataUpdatedAt).join(), snapshot, siteId],
   );
 
   // Chọn đối tượng của site khác trên bản đồ → chuyển sang site đó rồi giữ lựa chọn
   const pending = useRef<{ siteId: string; type: SelectableType; id: string } | null>(null);
-  const selection = useScene((s) => s.selection);
+  const selection = useScene((state) => state.selection);
   useEffect(() => {
     if (selection && selection.siteId !== siteId) {
-      const target = sites?.find((s) => s.id === selection.siteId);
+      const target = sites?.find((site) => site.id === selection.siteId);
       if (target) {
         pending.current = selection;
         navigate(`/sites/${target.code}`);
@@ -72,9 +72,9 @@ export function DashboardPage() {
   }, [selection, siteId, sites, navigate]);
   useEffect(() => {
     if (pending.current?.siteId === siteId) {
-      const p = pending.current;
+      const pendingSelection = pending.current;
       pending.current = null;
-      setTimeout(() => select(p), 50);
+      setTimeout(() => select(pendingSelection), 50);
     }
   }, [siteId, select]);
 

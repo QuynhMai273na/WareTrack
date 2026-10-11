@@ -40,6 +40,8 @@ export const LocationDto = z.object({
   zoneId: Uuid,
   zoneCode: z.string(),
   code: z.string(),
+  /** Tên hiển thị (Bay 1, Staging 3…) — null khi chỉ có mã. */
+  name: z.string().nullable(),
   qrValue: z.string(),
   locationType: LocationType,
   capacityUnits: z.number(),

@@ -17,6 +17,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { DemoModule } from './demo/demo.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { SitesModule } from './modules/sites/sites.module';
+import { SiteSetupModule } from './modules/site-setup/site-setup.module';
 import { OccupancyModule } from './modules/yard/occupancy.service';
 import { YardModule } from './modules/yard/yard.module';
 import { requestContextMiddleware } from './platform/context/request-context';
@@ -31,6 +32,7 @@ import { PlatformModule } from './platform/platform.module';
     IdentityModule,
     OccupancyModule,
     SitesModule,
+    SiteSetupModule,
     YardModule,
     MovementModule,
     InventoryModule,

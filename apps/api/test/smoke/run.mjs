@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const apiRoot = join(here, '..', '..');
-const suites = readdirSync(here).filter((f) => /^\d+-.*\.mjs$/.test(f)).sort();
+const suites = readdirSync(here).filter((fileName) => /^\d+-.*\.mjs$/.test(fileName)).sort();
 const shell = process.platform === 'win32';
 let failed = 0;
 
@@ -18,8 +18,8 @@ for (const suite of suites) {
     process.exit(1);
   }
   console.log(`\n=== ${suite}`);
-  const r = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit', env: process.env });
-  if (r.status !== 0) failed++;
+  const suiteRun = spawnSync(process.execPath, [join(here, suite)], { stdio: 'inherit', env: process.env });
+  if (suiteRun.status !== 0) failed++;
 }
 
 console.log(failed ? `\n${failed} suite(s) failed` : `\nAll ${suites.length} suites passed`);

@@ -37,14 +37,30 @@ pnpm dev                                    # API :3000 + web :5173
 
 - Web: http://localhost:5173 — Swagger: http://localhost:3000/api/docs
 - Tài khoản demo (mật khẩu `WareTrack@2026`): `admin`, `manager`, `dispatcher`, `gate`, `supervisor`, `operator`, `forklift`, `inventory`, `viewer`
-- Kịch bản demo giống video (xe tải nhận/xuất, shipment đang load): chạy `node apps/api/prisma/seed/scenario.mjs` khi API đang chạy, sau khi seed
+- Kịch bản demo giống video (xe tải vào cổng, lùi dock, xếp/dỡ, rời đi): đặt `DEMO_DIRECTOR=true` trong `apps/api/.env` — API tự dựng cảnh sau khi seed và điều phối liên tục (DEC-60)
+- Bản đồ mạng lưới: chọn ô site ở góc trên → **Network overview** để xem mọi site trên một bản đồ (DEC-61)
+
+## Demo và vận hành thật (DEC-62)
+
+| | Demo | Vận hành thật |
+|---|---|---|
+| Dữ liệu | `pnpm db:seed` hoặc `SEED_ON_EMPTY=true` (5 site theo video) | DB trống — không seed |
+| Xe tự chạy | `DEMO_DIRECTOR=true` (tự điều phối) · `DEMO_DIRECTOR=scene` (dựng cảnh video rồi để người thật thao tác bằng các tài khoản demo) | `DEMO_DIRECTOR=false` — xe chỉ di chuyển khi có người ghi nhận (cổng, dock, xếp/dỡ) |
+| Tài khoản đầu tiên | Tài khoản mẫu ở trên | `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD` (≥ 12 ký tự), tùy chọn `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_FULL_NAME` — tạo khi DB chưa có user |
+
+Quy trình đưa một kho thật vào hệ thống (đăng nhập bằng admin → tự vào **Administration**):
+
+1. **Sites & layouts → New site**: tạo site (có sẵn sơ đồ mẫu) → **Edit layout**: vẽ nhà kho, dock, staging, rack, ô chờ xe, trạm sạc, cổng; **Save draft** → **3D preview** → **Publish** (DEC-63).
+2. **Master data**: SKU, đối tác, xe tải, tài xế. **Users & roles**: tạo user và gán vai trò theo site. **Forklifts**: đăng ký xe nâng, trạm sạc, người lái (DEC-64).
+3. Trong site: **Opening stock** — nhập tồn đầu kỳ từ CSV, kiểm tra trước rồi mới ghi (DEC-65). **QR labels** — in nhãn dock/ô/pallet để dán ngoài hiện trường (DEC-66).
+4. Vận hành hằng ngày: cổng (walk-in, kiểm tra giấy tờ), điều phối (gán dock), kho (nhận/xuất, tác vụ), quản lý theo dõi bản đồ 3D.
 
 ## Kiểm thử
 
 | Lệnh | Nội dung |
 |---|---|
 | `pnpm typecheck` | Typecheck mọi package |
-| `pnpm --filter @waretrack/api test:smoke` | 5 bộ smoke test trên API + DB thật (yard, inventory, xe lưu bãi, thiết bị + thông báo, realtime); tự seed lại trước mỗi bộ. Cần API đang chạy |
+| `pnpm --filter @waretrack/api test:smoke` | 6 bộ smoke test trên API + DB thật (yard, inventory, xe lưu bãi, thiết bị + thông báo, realtime, thiết lập site / vận hành thật); tự seed lại trước mỗi bộ. Cần API đang chạy với `DEMO_DIRECTOR=false` và `SEED_VEHICLE_YARD=true` |
 | `pnpm --filter @waretrack/web e2e` | Playwright e2e (tự bật Vite dev server; cần API đang chạy với dữ liệu seed) |
 
 ## Deploy demo (DEC-52, DEC-58 — chi tiết mục 12.7)
@@ -54,7 +70,7 @@ pnpm dev                                    # API :3000 + web :5173
 - `WEB_ORIGIN`: URL web trên Vercel (ví dụ `https://waretrack.vercel.app`)
 - `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`: sinh bằng `node apps/api/scripts/gen-jwt-keys.mjs`
 
-Container tự chạy `prisma migrate deploy` và seed dữ liệu demo khi database trống. Tạo Deploy Hook trên Render rồi lưu vào secret GitHub `RENDER_DEPLOY_HOOK_URL`: workflow `api.yml` gọi hook này sau khi CI xanh trên `main`.
+Container tự chạy `prisma migrate deploy` và seed dữ liệu demo khi database trống. **Vận hành thật:** đặt `SEED_ON_EMPTY=false`, `DEMO_DIRECTOR=false` và thêm `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` (secret) trước lần deploy đầu tiên. Tạo Deploy Hook trên Render rồi lưu vào secret GitHub `RENDER_DEPLOY_HOOK_URL`: workflow `api.yml` gọi hook này sau khi CI xanh trên `main`.
 
 **Web → Vercel.** Tạo project từ repo với Root Directory = `apps/web` (build theo [`apps/web/vercel.json`](apps/web/vercel.json)), đặt biến môi trường:
 

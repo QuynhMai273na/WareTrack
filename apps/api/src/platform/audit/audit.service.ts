@@ -19,8 +19,8 @@ function scrub(obj?: Record<string, unknown>): Record<string, unknown> | undefin
   if (!obj) return undefined;
   return Object.fromEntries(
     Object.entries(obj)
-      .filter(([k]) => !SECRET_KEYS.test(k))
-      .map(([k, v]) => [k, v instanceof Date ? v.toISOString() : typeof v === 'bigint' ? v.toString() : v]),
+      .filter(([key]) => !SECRET_KEYS.test(key))
+      .map(([key, fieldValue]) => [key, fieldValue instanceof Date ? fieldValue.toISOString() : typeof fieldValue === 'bigint' ? fieldValue.toString() : fieldValue]),
   );
 }
 

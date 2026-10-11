@@ -34,8 +34,8 @@ export class DashboardController {
   }
 
   @Get('search')
-  async search(@CurrentUser() user: Principal, @Query('q') q = '') {
+  async search(@CurrentUser() user: Principal, @Query('q') query = '') {
     const access = await this.access.getUserAccess(user.userId);
-    return this.dashboard.search(q, access ? await this.access.allowedSiteIds(access) : []);
+    return this.dashboard.search(query, access ? await this.access.allowedSiteIds(access) : []);
   }
 }

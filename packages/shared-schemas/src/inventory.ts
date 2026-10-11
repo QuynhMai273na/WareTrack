@@ -17,6 +17,7 @@ export const SkuDto = z.object({
   id: Uuid,
   code: z.string(),
   name: z.string(),
+  category: z.string().nullable(),
   baseUom: z.string(),
   uomDecimals: z.number(),
   lotTracked: z.boolean(),
@@ -34,6 +35,8 @@ export const CreateSkuRequest = z
   .object({
     code: z.string().regex(/^[A-Z0-9-]{3,40}$/),
     name: z.string().min(2).max(200),
+    /** Nhóm hàng hiển thị (Packaging, PPE, Grocery…). */
+    category: z.string().max(40).optional(),
     baseUom: z.string().min(1).max(10).default('EA'),
     uomDecimals: z.number().int().min(0).max(3).default(0),
     lotTracked: z.boolean().default(false),
@@ -45,8 +48,8 @@ export const CreateSkuRequest = z
     lowStockThreshold: Qty.optional(),
   })
   .strict()
-  .refine((v) => !v.expiryTracked || v.lotTracked, { message: 'expiryTracked requires lotTracked', path: ['expiryTracked'] })
-  .refine((v) => v.allocationStrategy !== 'FEFO' || v.expiryTracked, { message: 'FEFO requires expiryTracked (DEC-09)', path: ['allocationStrategy'] });
+  .refine((request) => !request.expiryTracked || request.lotTracked, { message: 'expiryTracked requires lotTracked', path: ['expiryTracked'] })
+  .refine((request) => request.allocationStrategy !== 'FEFO' || request.expiryTracked, { message: 'FEFO requires expiryTracked (DEC-09)', path: ['allocationStrategy'] });
 export type CreateSkuRequest = z.infer<typeof CreateSkuRequest>;
 
 export const BalanceDto = z.object({
@@ -172,7 +175,7 @@ export const CreateAdjustmentRequest = z
     note: z.string().max(500).optional(),
   })
   .strict()
-  .refine((v) => Number(v.qtyDelta) !== 0, { message: 'qtyDelta must not be zero', path: ['qtyDelta'] });
+  .refine((request) => Number(request.qtyDelta) !== 0, { message: 'qtyDelta must not be zero', path: ['qtyDelta'] });
 export type CreateAdjustmentRequest = z.infer<typeof CreateAdjustmentRequest>;
 
 export const DecisionRequest = z.object({ note: z.string().max(500).optional(), expectedVersion: ExpectedVersion }).strict();
@@ -214,7 +217,7 @@ export const CreateStockCountRequest = z
     freeze: z.boolean().default(false),
   })
   .strict()
-  .refine((v) => (v.scope.zoneIds?.length ?? 0) + (v.scope.locationIds?.length ?? 0) + (v.scope.skuIds?.length ?? 0) > 0, { message: 'Scope must not be empty', path: ['scope'] });
+  .refine((request) => (request.scope.zoneIds?.length ?? 0) + (request.scope.locationIds?.length ?? 0) + (request.scope.skuIds?.length ?? 0) > 0, { message: 'Scope must not be empty', path: ['scope'] });
 export type CreateStockCountRequest = z.infer<typeof CreateStockCountRequest>;
 
 export const RecordCountRequest = z.object({ countedQty: Qty }).strict();

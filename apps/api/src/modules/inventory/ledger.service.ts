@@ -6,7 +6,7 @@ import { currentContext } from '../../platform/context/request-context';
 import { DomainError } from '../../platform/errors/domain-error';
 import type { Tx } from '../../platform/prisma/prisma.service';
 
-const D = Prisma.Decimal;
+const Decimal = Prisma.Decimal;
 type Dec = Prisma.Decimal;
 
 export interface LedgerLine {
@@ -64,7 +64,7 @@ interface Delta {
   huId?: string | null;
 }
 
-const fmt = (d: Dec) => d.toFixed(3);
+const fmt = (amount: Dec) => amount.toFixed(3);
 
 /**
  * Sổ cái tồn kho (FR-06.05, BR-02, BR-20): mọi thay đổi số lượng đi qua đây, trong transaction của caller.
@@ -77,30 +77,30 @@ export class LedgerService {
     const existing = await tx.inventoryTransaction.findUnique({ where: { idempotencyKey: line.idempotencyKey } });
     if (existing) return { tx: existing, replayed: true, changes: [] };
 
-    const qty = new D(line.quantity);
+    const qty = new Decimal(line.quantity);
     if (qty.lte(0)) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Quantity must be positive');
     const sku = await tx.sku.findUnique({ where: { id: line.skuId } });
     if (!sku) throw DomainError.notFound('SKU');
     if (sku.lotTracked && !line.lotId) throw DomainError.rule(ErrorCode.LOT_REQUIRED, `SKU ${sku.code} requires a lot (BR-25)`);
     if (qty.decimalPlaces() > sku.uomDecimals) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, `SKU ${sku.code} allows ${sku.uomDecimals} decimal places`);
 
-    const carry = new D(line.carryReserved ?? 0);
+    const carry = new Decimal(line.carryReserved ?? 0);
     const deltas = this.deltas(line, qty, carry);
     const changes: BalanceChange[] = [];
     let sourceBalanceId: string | null = null;
     let destBalanceId: string | null = null;
 
     // Giảm trước, tăng sau — để lỗi thiếu hàng xuất hiện trước khi tạo balance mới
-    for (const d of deltas.sort((a, b) => a.onHand.comparedTo(b.onHand))) {
-      const bal = await this.lockBalance(tx, line, d, line.receivedAt);
-      const onHand = new D(bal.qtyOnHand).plus(d.onHand);
-      const reserved = new D(bal.qtyReserved).plus(d.reserved);
-      if (d.onHand.lt(0)) {
-        const available = new D(bal.qtyOnHand).minus(bal.qtyReserved);
-        const needFree = d.onHand.neg().minus(d.reserved.neg());
-        if (onHand.lt(0)) throw DomainError.rule(ErrorCode.NEGATIVE_STOCK, `Not enough stock (${fmt(new D(bal.qtyOnHand))} on hand)`, { onHand: fmt(new D(bal.qtyOnHand)) });
+    for (const delta of deltas.sort((left, right) => left.onHand.comparedTo(right.onHand))) {
+      const bal = await this.lockBalance(tx, line, delta, line.receivedAt);
+      const onHand = new Decimal(bal.qtyOnHand).plus(delta.onHand);
+      const reserved = new Decimal(bal.qtyReserved).plus(delta.reserved);
+      if (delta.onHand.lt(0)) {
+        const available = new Decimal(bal.qtyOnHand).minus(bal.qtyReserved);
+        const needFree = delta.onHand.neg().minus(delta.reserved.neg());
+        if (onHand.lt(0)) throw DomainError.rule(ErrorCode.NEGATIVE_STOCK, `Not enough stock (${fmt(new Decimal(bal.qtyOnHand))} on hand)`, { onHand: fmt(new Decimal(bal.qtyOnHand)) });
         if (needFree.gt(available)) {
-          throw DomainError.rule(ErrorCode.INSUFFICIENT_AVAILABLE_STOCK, `Only ${fmt(available)} available — the rest is reserved`, { available: fmt(available), reserved: fmt(new D(bal.qtyReserved)) });
+          throw DomainError.rule(ErrorCode.INSUFFICIENT_AVAILABLE_STOCK, `Only ${fmt(available)} available — the rest is reserved`, { available: fmt(available), reserved: fmt(new Decimal(bal.qtyReserved)) });
         }
         sourceBalanceId = bal.id;
       } else {
@@ -146,10 +146,10 @@ export class LedgerService {
   }
 
   private deltas(line: LedgerLine, qty: Dec, carry: Dec): Delta[] {
-    const zero = new D(0);
-    const need = (v: string | null | undefined, name: string) => {
-      if (!v) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, `${name} is required for ${line.txType}`);
-      return v;
+    const zero = new Decimal(0);
+    const need = (fieldValue: string | null | undefined, name: string) => {
+      if (!fieldValue) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, `${name} is required for ${line.txType}`);
+      return fieldValue;
     };
     switch (line.txType) {
       case 'RECEIPT':
@@ -192,37 +192,37 @@ export class LedgerService {
   }
 
   /** Lấy (hoặc tạo) balance theo khóa và khóa FOR UPDATE — NULL-safe cho lot/HU. */
-  private async lockBalance(tx: Tx, line: LedgerLine, d: Delta, receivedAt?: Date): Promise<InventoryBalance> {
+  private async lockBalance(tx: Tx, line: LedgerLine, delta: Delta, receivedAt?: Date): Promise<InventoryBalance> {
     const lotId = line.lotId ?? null;
-    const huId = d.huId !== undefined ? d.huId : (line.handlingUnitId ?? null);
-    if (d.onHand.gt(0)) {
+    const huId = delta.huId !== undefined ? delta.huId : (line.handlingUnitId ?? null);
+    if (delta.onHand.gt(0)) {
       await tx.$executeRaw`
         INSERT INTO inventory_balance (id, site_id, location_id, sku_id, lot_id, handling_unit_id, stock_status, qty_on_hand, qty_reserved, received_at, version, updated_at)
-        VALUES (${uuidv7()}::uuid, ${line.siteId}::uuid, ${d.locationId}::uuid, ${line.skuId}::uuid, ${lotId}::uuid, ${huId}::uuid,
-                ${d.status}::"StockStatus", 0, 0, ${receivedAt ?? new Date()}, 0, now())
+        VALUES (${uuidv7()}::uuid, ${line.siteId}::uuid, ${delta.locationId}::uuid, ${line.skuId}::uuid, ${lotId}::uuid, ${huId}::uuid,
+                ${delta.status}::"StockStatus", 0, 0, ${receivedAt ?? new Date()}, 0, now())
         ON CONFLICT (site_id, location_id, sku_id, lot_id, handling_unit_id, stock_status) WHERE qty_on_hand >= 0 DO NOTHING`;
     }
     const rows = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM inventory_balance
-      WHERE site_id = ${line.siteId}::uuid AND location_id = ${d.locationId}::uuid AND sku_id = ${line.skuId}::uuid
+      WHERE site_id = ${line.siteId}::uuid AND location_id = ${delta.locationId}::uuid AND sku_id = ${line.skuId}::uuid
         AND lot_id IS NOT DISTINCT FROM ${lotId}::uuid AND handling_unit_id IS NOT DISTINCT FROM ${huId}::uuid
-        AND stock_status = ${d.status}::"StockStatus"
+        AND stock_status = ${delta.status}::"StockStatus"
       FOR UPDATE`;
     if (rows.length === 0) throw DomainError.rule(ErrorCode.NEGATIVE_STOCK, 'No stock at the source for this SKU / lot / pallet / status');
     return tx.inventoryBalance.findUniqueOrThrow({ where: { id: rows[0].id } });
   }
 
-  change(b: InventoryBalance): BalanceChange {
+  change(balance: InventoryBalance): BalanceChange {
     return {
-      balanceId: b.id,
-      skuId: b.skuId,
-      locationId: b.locationId,
-      lotId: b.lotId,
-      handlingUnitId: b.handlingUnitId,
-      stockStatus: b.stockStatus,
-      qtyOnHand: new D(b.qtyOnHand).toFixed(3),
-      qtyReserved: new D(b.qtyReserved).toFixed(3),
-      balanceVersion: b.version,
+      balanceId: balance.id,
+      skuId: balance.skuId,
+      locationId: balance.locationId,
+      lotId: balance.lotId,
+      handlingUnitId: balance.handlingUnitId,
+      stockStatus: balance.stockStatus,
+      qtyOnHand: new Decimal(balance.qtyOnHand).toFixed(3),
+      qtyReserved: new Decimal(balance.qtyReserved).toFixed(3),
+      balanceVersion: balance.version,
     };
   }
 }

@@ -123,18 +123,18 @@ export class AuthService {
     if (!access) throw new DomainError(401, ErrorCode.UNAUTHENTICATED, 'Account not found');
     const siteIds = await this.access.allowedSiteIds(access);
     const sites = await this.prisma.site.findMany({ where: { id: { in: siteIds } }, orderBy: { code: 'asc' } });
-    const enterpriseRoles = access.assignments.filter((a) => a.siteId === null).map((a) => a.roleCode);
+    const enterpriseRoles = access.assignments.filter((assignment) => assignment.siteId === null).map((assignment) => assignment.roleCode);
     return {
       user: { id: access.userId, username: access.username, fullName: access.fullName },
       enterpriseRoles,
-      enterprisePermissions: [...(await this.access.permissionsAt({ ...access, assignments: access.assignments.filter((a) => a.siteId === null) }, null))],
+      enterprisePermissions: [...(await this.access.permissionsAt({ ...access, assignments: access.assignments.filter((assignment) => assignment.siteId === null) }, null))],
       sites: await Promise.all(
-        sites.map(async (s) => ({
-          id: s.id,
-          code: s.code,
-          name: s.name,
-          roles: this.access.rolesAt(access, s.id),
-          permissions: [...(await this.access.permissionsAt(access, s.id))],
+        sites.map(async (site) => ({
+          id: site.id,
+          code: site.code,
+          name: site.name,
+          roles: this.access.rolesAt(access, site.id),
+          permissions: [...(await this.access.permissionsAt(access, site.id))],
         })),
       ),
       permissionVersion: access.permissionVersion,
@@ -147,13 +147,13 @@ export class AuthService {
   }
 
   private async issue(tx: Parameters<Parameters<TxRunner['run']>[0]>[0], user: User, familyId: string, meta: ClientMeta): Promise<IssuedTokens> {
-    const e = env();
+    const environment = env();
     const accessToken = await this.jwt.signAsync({ sub: user.id, pv: user.permissionVersion, sid: familyId });
     const refreshToken = randomBytes(32).toString('base64url');
-    const refreshExpiresAt = new Date(Date.now() + e.REFRESH_TOKEN_TTL_DAYS * 86_400_000);
+    const refreshExpiresAt = new Date(Date.now() + environment.REFRESH_TOKEN_TTL_DAYS * 86_400_000);
     await tx.refreshToken.create({
       data: { userId: user.id, tokenHash: hashToken(refreshToken), familyId, expiresAt: refreshExpiresAt, ip: meta.ip, userAgent: meta.userAgent },
     });
-    return { accessToken, expiresIn: e.ACCESS_TOKEN_TTL_SECONDS, refreshToken, refreshExpiresAt };
+    return { accessToken, expiresIn: environment.ACCESS_TOKEN_TTL_SECONDS, refreshToken, refreshExpiresAt };
   }
 }

@@ -27,8 +27,8 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Header({ icon, kicker, title, sub, onClose, openTo }: { icon: ReactNode; kicker: string; title: string; sub?: string | null; onClose?: () => void; openTo?: string }) {
-  const focus = useScene((s) => s.select);
-  const selection = useScene((s) => s.selection);
+  const focus = useScene((state) => state.select);
+  const selection = useScene((state) => state.selection);
   return (
     <div className="mb-3 flex items-start gap-3">
       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft/70 text-brand">{icon}</div>
@@ -81,18 +81,18 @@ function Bar({ value, right, color = 'bg-ok' }: { value: number; right?: string;
 /** Xe tải (video: kicker hãng · TRK-2205 · tài xế · biển số · trạng thái · tiến độ · Shipment/Customer/Destination/ETA/Speed/Bay/Cargo). */
 function TruckInspector({ snapshot, visitId, timeZone }: { snapshot: SiteSnapshot; visitId: string; timeZone: string }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
-  const { data: v } = useVisit(snapshot.site.id, visitId);
-  const snap = snapshot.trucks.find((x) => x.visitId === visitId);
-  const shipmentRef = snapshot.activeShipments.find((s) => s.visitId === visitId);
+  const select = useScene((state) => state.select);
+  const { data: visit } = useVisit(snapshot.site.id, visitId);
+  const snap = snapshot.trucks.find((truck) => truck.visitId === visitId);
+  const shipmentRef = snapshot.activeShipments.find((activeShipment) => activeShipment.visitId === visitId);
   const { data: shipment } = useShipment(snapshot.site.id, shipmentRef?.id);
   if (!snap) return null;
   const site = snapshot.site;
-  const dock = snapshot.docks.find((d) => d.locationId === snap.dockLocationId);
+  const dock = snapshot.docks.find((candidate) => candidate.locationId === snap.dockLocationId);
   const progress = shipmentRef?.progress ?? { done: 0, total: 0 };
-  const inbound = (shipment?.direction ?? v?.direction) === 'INBOUND';
+  const inbound = (shipment?.direction ?? visit?.direction) === 'INBOUND';
   const etaMin = minutesFromNow(snap.etaAt);
-  const workStep = shipment?.steps.find((s) => s.key === (inbound ? 'UNLOADING' : 'LOADING'));
+  const workStep = shipment?.steps.find((step) => step.key === (inbound ? 'UNLOADING' : 'LOADING'));
   const doneIn = minutesFromNow(workStep?.eta ?? null);
   let status: { tone: Tone; label: string; text: string; bar: number; right: string };
   switch (snap.status) {
@@ -130,7 +130,7 @@ function TruckInspector({ snapshot, visitId, timeZone }: { snapshot: SiteSnapsho
           : '—';
   return (
     <>
-      <Header icon={<Truck size={22} />} kicker={v?.truck.carrier?.name ?? snap.carrier ?? 'Carrier'} title={snap.truckCode} sub={`${v?.driver?.fullName ?? '—'} · ${v?.truck.plateNumber ?? snap.plate}`} onClose={() => select(null)} openTo={`/sites/${site.code}/yard`} />
+      <Header icon={<Truck size={22} />} kicker={visit?.truck.carrier?.name ?? snap.carrier ?? 'Carrier'} title={snap.truckCode} sub={`${visit?.driver?.fullName ?? '—'} · ${visit?.truck.plateNumber ?? snap.plate}`} onClose={() => select(null)} openTo={`/sites/${site.code}/yard`} />
       <StatusLine tone={status.tone} label={status.label} text={status.text} />
       <Bar value={status.bar} right={status.right} color={snap.status === 'SCHEDULED' || snap.status === 'DOCK_ASSIGNED' ? 'bg-brand' : 'bg-ok'} />
       <Row label={t('v.truck.shipment')}>{shipment ? <span className="text-brand">#{shipment.code}</span> : '—'}</Row>
@@ -158,27 +158,27 @@ const FORKLIFT_TEXT: Record<string, string> = { CHARGING: 'Charging at bay', AVA
 
 function ForkliftInspector({ snapshot, id }: { snapshot: SiteSnapshot; id: string }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
-  const f = snapshot.forklifts.find((x) => x.id === id);
+  const select = useScene((state) => state.select);
+  const forklift = snapshot.forklifts.find((candidate) => candidate.id === id);
   const { data: details } = useEquipment(snapshot.site.id);
-  const d = details?.find((x) => x.id === id);
+  const detail = details?.find((equipment) => equipment.id === id);
   const [manage, setManage] = useState(false);
-  if (!f) return null;
-  const busy = f.status === 'BUSY' || f.status === 'ASSIGNED';
-  const unloading = f.taskSummary?.startsWith('Unloading');
-  const label = busy ? (unloading ? t('v.fl.unloadingTruck') : t('v.fl.loadingTruck')) : f.status === 'CHARGING' ? t('v.fl.charging') : f.status === 'AVAILABLE' ? t('v.fl.idle') : t(`status.${f.status}`);
-  const charger = d?.chargerLocationId ? locationLabels.get(d.chargerLocationId) : undefined;
+  if (!forklift) return null;
+  const busy = forklift.status === 'BUSY' || forklift.status === 'ASSIGNED';
+  const unloading = forklift.taskSummary?.startsWith('Unloading');
+  const label = busy ? (unloading ? t('v.fl.unloadingTruck') : t('v.fl.loadingTruck')) : forklift.status === 'CHARGING' ? t('v.fl.charging') : forklift.status === 'AVAILABLE' ? t('v.fl.idle') : t(`status.${forklift.status}`);
+  const charger = detail?.chargerLocationId ? locationLabels.get(detail.chargerLocationId) : undefined;
   return (
     <>
-      <Header icon={<Forklift size={22} />} kicker={`${t('v.fl.kicker')} · ${snapshot.site.code}`} title={f.code} sub={`${d?.operator ?? '—'} · ${f.model ?? ''}`} onClose={() => select(null)} openTo={`/sites/${snapshot.site.code}/tasks`} />
-      <StatusLine tone={busy ? 'ok' : f.status === 'CHARGING' ? 'warn' : 'neutral'} label={label} text={busy ? f.taskSummary : FORKLIFT_TEXT[f.status]} />
-      {f.batteryPct !== null ? <Bar value={f.batteryPct} right={`${t('v.fl.battery')} ${f.batteryPct}%`} /> : null}
+      <Header icon={<Forklift size={22} />} kicker={`${t('v.fl.kicker')} · ${snapshot.site.code}`} title={forklift.code} sub={`${detail?.operator ?? '—'} · ${forklift.model ?? ''}`} onClose={() => select(null)} openTo={`/sites/${snapshot.site.code}/tasks`} />
+      <StatusLine tone={busy ? 'ok' : forklift.status === 'CHARGING' ? 'warn' : 'neutral'} label={label} text={busy ? forklift.taskSummary : FORKLIFT_TEXT[forklift.status]} />
+      {forklift.batteryPct !== null ? <Bar value={forklift.batteryPct} right={`${t('v.fl.battery')} ${forklift.batteryPct}%`} /> : null}
       <Row label={t('v.fl.carrying')}>{busy && !unloading ? t('v.fl.pallet') : t('v.fl.empty')}</Row>
-      <Row label={t('v.fl.moves')}>{d?.movesToday ?? '—'}</Row>
-      <Row label={t('v.truck.speed')}>{busy ? `${(d?.speedKmh || 4.5).toFixed(1)} km/h` : '0.0 km/h'}</Row>
+      <Row label={t('v.fl.moves')}>{detail?.movesToday ?? '—'}</Row>
+      <Row label={t('v.truck.speed')}>{busy ? `${(detail?.speedKmh || 4.5).toFixed(1)} km/h` : '0.0 km/h'}</Row>
       <Row label={t('v.fl.charger')}>
-        {d?.chargerLocationId ? (
-          <button className="text-brand hover:underline" onClick={() => select({ siteId: snapshot.site.id, type: 'charger', id: d.chargerLocationId! })}>
+        {detail?.chargerLocationId ? (
+          <button className="text-brand hover:underline" onClick={() => select({ siteId: snapshot.site.id, type: 'charger', id: detail.chargerLocationId! })}>
             {charger?.code ?? '—'}
           </button>
         ) : (
@@ -186,10 +186,10 @@ function ForkliftInspector({ snapshot, id }: { snapshot: SiteSnapshot; id: strin
         )}
       </Row>
       <Row label={t('v.siteLabel')}>{snapshot.site.name}</Row>
-      <button className="mt-2 text-xs font-medium text-brand hover:underline" onClick={() => setManage((m) => !m)}>
+      <button className="mt-2 text-xs font-medium text-brand hover:underline" onClick={() => setManage((previous) => !previous)}>
         {manage ? t('v.fl.hideActions') : t('v.fl.manage')}
       </button>
-      {manage ? <ForkliftActions siteId={snapshot.site.id} id={f.id} status={f.status} version={f.version} /> : null}
+      {manage ? <ForkliftActions siteId={snapshot.site.id} id={forklift.id} status={forklift.status} version={forklift.version} /> : null}
     </>
   );
 }
@@ -206,38 +206,38 @@ const EQUIPMENT_NEXT: Record<string, string[]> = {
 /** Đổi trạng thái thủ công (#158, mục 9.7) và nhập pin (#159, DEC-55 — chưa có cảm biến). */
 function ForkliftActions({ siteId, id, status, version }: { siteId: string; id: string; status: string; version: number }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const qc = useQueryClient();
+  const can = useAuth((state) => state.can);
+  const queryClient = useQueryClient();
   const [battery, setBattery] = useState('');
   const run = useMutation({
     mutationFn: ({ path, body }: { path: string; body: unknown }) => api(`/sites/${siteId}/equipment/${id}/${path}`, { method: 'POST', body }),
     onSuccess: () => {
       setBattery('');
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'equipment'] });
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'equipment'] });
     },
   });
   if (!can(siteId, 'equipment.status.update')) return null;
-  const next = (EQUIPMENT_NEXT[status] ?? []).filter((s) => s !== 'MAINTENANCE' || can(siteId, 'equipment.manage'));
+  const next = (EQUIPMENT_NEXT[status] ?? []).filter((nextStatus) => nextStatus !== 'MAINTENANCE' || can(siteId, 'equipment.manage'));
   return (
     <div className="mt-2 space-y-2 border-t border-line pt-2">
       <div className="flex flex-wrap gap-1.5">
-        {next.map((s) => (
+        {next.map((nextStatus) => (
           <button
-            key={s}
+            key={nextStatus}
             disabled={run.isPending}
             onClick={() => {
-              const reason = s === 'MAINTENANCE' ? window.prompt(t('yard.reason')) : undefined;
-              if (s === 'MAINTENANCE' && !reason) return;
-              run.mutate({ path: 'status', body: { toStatus: s, ...(reason ? { reason } : {}), expectedVersion: version } });
+              const reason = nextStatus === 'MAINTENANCE' ? window.prompt(t('yard.reason')) : undefined;
+              if (nextStatus === 'MAINTENANCE' && !reason) return;
+              run.mutate({ path: 'status', body: { toStatus: nextStatus, ...(reason ? { reason } : {}), expectedVersion: version } });
             }}
-            className={cn('rounded-lg border px-2.5 py-1 text-xs font-medium hover:border-brand', s === 'MAINTENANCE' ? 'border-bad/40 text-bad' : 'border-line')}
+            className={cn('rounded-lg border px-2.5 py-1 text-xs font-medium hover:border-brand', nextStatus === 'MAINTENANCE' ? 'border-bad/40 text-bad' : 'border-line')}
           >
-            {t(`inspector.toStatus.${s}`)}
+            {t(`inspector.toStatus.${nextStatus}`)}
           </button>
         ))}
       </div>
-      <form className="flex gap-1.5" onSubmit={(e) => (e.preventDefault(), battery && run.mutate({ path: 'telemetry', body: { batteryPct: Number(battery) } }))}>
-        <input className="h-8 w-24 rounded-lg border border-line px-2 text-xs outline-none focus:border-brand" inputMode="numeric" placeholder={`${t('inspector.battery')} %`} value={battery} onChange={(e) => setBattery(e.target.value.replace(/\D/g, '').slice(0, 3))} />
+      <form className="flex gap-1.5" onSubmit={(event) => (event.preventDefault(), battery && run.mutate({ path: 'telemetry', body: { batteryPct: Number(battery) } }))}>
+        <input className="h-8 w-24 rounded-lg border border-line px-2 text-xs outline-none focus:border-brand" inputMode="numeric" placeholder={`${t('inspector.battery')} %`} value={battery} onChange={(event) => setBattery(event.target.value.replace(/\D/g, '').slice(0, 3))} />
         <button type="submit" className="rounded-lg bg-brand-soft px-2.5 text-xs font-medium text-brand" disabled={!battery || run.isPending}>
           {t('inspector.updateBattery')}
         </button>
@@ -252,24 +252,24 @@ const LIFECYCLE_LABEL: Record<string, string> = { STAGED: 'Staged', IN_STOCK: 'I
 /** Pallet (video: "PALLET · PPE · Safety Helmet · PAL-1026 · PPE-HLM-Y · Staged · WH-01 · Yard slot S01"). */
 function PalletInspector({ snapshot, id, timeZone }: { snapshot: SiteSnapshot; id: string; timeZone: string }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const { data: hu } = usePallet(snapshot.site.id, id);
-  const snap = snapshot.pallets.find((p) => p.id === id);
+  const snap = snapshot.pallets.find((pallet) => pallet.id === id);
   if (!hu && !snap) return null;
-  const c = hu?.contents[0];
+  const content = hu?.contents[0];
   const loc = hu?.location ? `${snapshot.site.code} · ${hu.location.name ?? locationLabels.get(hu.location.id)?.label ?? hu.location.code}` : '—';
-  const received = c?.receivedAt ? `${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone }).format(new Date(c.receivedAt))}, ${formatTime(c.receivedAt, timeZone)}` : '—';
+  const received = content?.receivedAt ? `${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone }).format(new Date(content.receivedAt))}, ${formatTime(content.receivedAt, timeZone)}` : '—';
   const lifecycle = hu?.lifecycle ?? snap?.lifecycle ?? '';
   return (
     <>
-      <Header icon={<SkuIcon code={c?.sku.code ?? ''} size={30} />} kicker={`${t('v.pallet.kicker')} · ${(c?.sku.category ?? 'General').toUpperCase()}`} title={c?.sku.name ?? snap?.label ?? ''} sub={`${hu?.code ?? snap?.code} · ${c?.sku.code ?? ''}`} onClose={() => select(null)} openTo={`/sites/${snapshot.site.code}/inventory`} />
+      <Header icon={<SkuIcon code={content?.sku.code ?? ''} size={30} />} kicker={`${t('v.pallet.kicker')} · ${(content?.sku.category ?? 'General').toUpperCase()}`} title={content?.sku.name ?? snap?.label ?? ''} sub={`${hu?.code ?? snap?.code} · ${content?.sku.code ?? ''}`} onClose={() => select(null)} openTo={`/sites/${snapshot.site.code}/inventory`} />
       <StatusLine tone={lifecycle === 'STAGED' ? 'ok' : 'info'} label={LIFECYCLE_LABEL[lifecycle] ?? lifecycle} text={loc} />
       <Row label={t('v.pallet.qty')}>
-        {c ? Number(c.qtyOnHand).toLocaleString('en-US') : '—'} {t('v.units')}
+        {content ? Number(content.qtyOnHand).toLocaleString('en-US') : '—'} {t('v.units')}
       </Row>
       <Row label={t('v.pallet.weight')}>{hu?.grossWeightKg ? `${Math.round(hu.grossWeightKg)} kg` : '—'}</Row>
       <Row label={t('v.pallet.location')}>{loc}</Row>
-      <Row label={t('v.pallet.lot')}>{c?.lotNumber ?? '—'}</Row>
+      <Row label={t('v.pallet.lot')}>{content?.lotNumber ?? '—'}</Row>
       <Row label={t('v.pallet.received')}>{received}</Row>
       <Row label={t('v.siteLabel')}>{snapshot.site.name}</Row>
     </>
@@ -279,13 +279,13 @@ function PalletInspector({ snapshot, id, timeZone }: { snapshot: SiteSnapshot; i
 /** Dock (video: "DOCK BAY · In 2 · Dock door with leveller · Booked · TRK-2481 due in 3 min"). */
 function DockInspector({ snapshot, id }: { snapshot: SiteSnapshot; id: string }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
-  const dock = snapshot.docks.find((d) => d.locationId === id);
+  const select = useScene((state) => state.select);
+  const dock = snapshot.docks.find((candidate) => candidate.locationId === id);
   const { data: visits } = useVisits(snapshot.site.id);
   if (!dock) return null;
-  const truck = snapshot.trucks.find((x) => x.dockLocationId === id);
+  const truck = snapshot.trucks.find((candidate) => candidate.dockLocationId === id);
   const since = Date.now() - 12 * 3600_000;
-  const trucksToday = visits?.filter((v) => v.dock?.id === id && v.arrivedAt && new Date(v.arrivedAt).getTime() > since).length ?? 0;
+  const trucksToday = visits?.filter((visit) => visit.dock?.id === id && visit.arrivedAt && new Date(visit.arrivedAt).getTime() > since).length ?? 0;
   const eta = truck?.etaAt ? minutesFromNow(truck.etaAt) : null;
   const status: { tone: Tone; label: string; text: string } =
     dock.effectiveStatus === 'RESERVED'
@@ -318,21 +318,21 @@ function DockInspector({ snapshot, id }: { snapshot: SiteSnapshot; id: string })
 /** Trạm sạc (video: "CHARGER · C1 · 48 V lithium-ion forklift charger · Free · FL-10 is out"). Số phiên/điện năng là ước tính (DEC-55). */
 function ChargerInspector({ snapshot, id }: { snapshot: SiteSnapshot; id: string }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const { data: details } = useEquipment(snapshot.site.id);
-  const owner = details?.find((d) => d.chargerLocationId === id);
-  const f = owner ? snapshot.forklifts.find((x) => x.id === owner.id) : undefined;
+  const owner = details?.find((equipment) => equipment.chargerLocationId === id);
+  const forklift = owner ? snapshot.forklifts.find((candidate) => candidate.id === owner.id) : undefined;
   const code = locationLabels.get(id)?.code ?? '—';
-  const charging = f?.status === 'CHARGING';
+  const charging = forklift?.status === 'CHARGING';
   const sessions = owner ? 3 + (owner.movesToday % 6) : 0;
   return (
     <>
       <Header icon={<BatteryCharging size={22} />} kicker={`${t('v.charger.kicker')} · ${snapshot.site.code}`} title={code} sub={t('v.charger.model')} onClose={() => select(null)} />
-      <StatusLine tone={charging ? 'warn' : 'neutral'} label={charging ? t('v.fl.charging') : t('v.charger.free')} text={f ? (charging ? `${f.code} · ${f.batteryPct ?? 0}%` : `${f.code} ${t('v.charger.isOut')} · ${f.taskSummary ?? t('v.fl.idle')}`) : ''} />
+      <StatusLine tone={charging ? 'warn' : 'neutral'} label={charging ? t('v.fl.charging') : t('v.charger.free')} text={forklift ? (charging ? `${forklift.code} · ${forklift.batteryPct ?? 0}%` : `${forklift.code} ${t('v.charger.isOut')} · ${forklift.taskSummary ?? t('v.fl.idle')}`) : ''} />
       <Row label={t('v.charger.forklift')}>
-        {f ? (
-          <button className="text-brand hover:underline" onClick={() => select({ siteId: snapshot.site.id, type: 'forklift', id: f.id })}>
-            {f.code} · {t('v.fl.battery').toLowerCase()} {f.batteryPct ?? 0}%
+        {forklift ? (
+          <button className="text-brand hover:underline" onClick={() => select({ siteId: snapshot.site.id, type: 'forklift', id: forklift.id })}>
+            {forklift.code} · {t('v.fl.battery').toLowerCase()} {forklift.batteryPct ?? 0}%
           </button>
         ) : (
           '—'
@@ -351,23 +351,23 @@ const SITE_KICKER: Record<string, string> = { DEPOT: 'Depot', DISTRIBUTION_CENTE
 /** Panel site (video: "DEPOT · WH-01 · Riverside Hub · Operational · 1 docked · 1 arriving · 3 staged …"). */
 function SiteInspector({ snapshot }: { snapshot: SiteSnapshot }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const { data: sites } = useSites();
-  const can = useAuth((s) => s.can);
+  const can = useAuth((state) => state.can);
   const { data: availability } = useAvailability(can(snapshot.site.id, 'inventory.read') ? snapshot.site.id : undefined);
   const { data: settings } = useSiteSettings(snapshot.site.id);
-  const site = sites?.find((s) => s.id === snapshot.site.id);
-  const k = (key: string) => snapshot.kpis.find((x) => x.key === key);
-  const docked = snapshot.trucks.filter((x) => x.status === 'AT_DOCK' || x.status === 'HANDLING').length;
-  const arriving = snapshot.trucks.filter((x) => x.status === 'SCHEDULED' && (minutesFromNow(x.etaAt) ?? 99) <= 15).length;
+  const site = sites?.find((candidate) => candidate.id === snapshot.site.id);
+  const findKpi = (key: string) => snapshot.kpis.find((kpi) => kpi.key === key);
+  const docked = snapshot.trucks.filter((truck) => truck.status === 'AT_DOCK' || truck.status === 'HANDLING').length;
+  const arriving = snapshot.trucks.filter((truck) => truck.status === 'SCHEDULED' && (minutesFromNow(truck.etaAt) ?? 99) <= 15).length;
   // "staged" = pallet chờ xuất ở làn staging (không tính kho bãi ngoài trời "Yard …")
-  const staged = snapshot.pallets.filter((p) => p.lifecycle === 'STAGED' && p.position?.locationId && !(locationLabels.get(p.position.locationId)?.label ?? '').startsWith('Yard')).length;
-  const working = snapshot.forklifts.filter((f) => f.status === 'BUSY' || f.status === 'ASSIGNED');
-  const busyDocks = snapshot.docks.filter((d) => d.effectiveStatus === 'OCCUPIED' || d.effectiveStatus === 'RESERVED').length;
-  const stock = k('STOCK_ON_HAND_PALLETS');
-  const vehicles = k('VEHICLES_STORED');
+  const staged = snapshot.pallets.filter((pallet) => pallet.lifecycle === 'STAGED' && pallet.position?.locationId && !(locationLabels.get(pallet.position.locationId)?.label ?? '').startsWith('Yard')).length;
+  const working = snapshot.forklifts.filter((forklift) => forklift.status === 'BUSY' || forklift.status === 'ASSIGNED');
+  const busyDocks = snapshot.docks.filter((dock) => dock.effectiveStatus === 'OCCUPIED' || dock.effectiveStatus === 'RESERVED').length;
+  const stock = findKpi('STOCK_ON_HAND_PALLETS');
+  const vehicles = findKpi('VEHICLES_STORED');
   const featured = settings?.dashboardSkus?.length
-    ? settings.dashboardSkus.map((c) => availability?.find((a) => a.sku.code === c)).filter((a): a is NonNullable<typeof a> => !!a)
+    ? settings.dashboardSkus.map((skuCode) => availability?.find((skuAvailability) => skuAvailability.sku.code === skuCode)).filter((skuAvailability): skuAvailability is NonNullable<typeof skuAvailability> => !!skuAvailability)
     : (availability ?? []).slice(0, 4);
   const tile = (label: string, value: ReactNode, unit?: string, bar?: number) => (
     <div className="rounded-xl bg-slate-50 px-3 py-2.5">
@@ -410,14 +410,14 @@ function SiteInspector({ snapshot }: { snapshot: SiteSnapshot }) {
       {vehicles ? (
         <div className="grid grid-cols-2 gap-2">
           {tile(t('kpi.VEHICLES_STORED'), vehicles.value ?? 0)}
-          {tile(t('kpi.YARD_OCCUPANCY'), `${k('YARD_OCCUPANCY')?.sub?.used ?? 0} / ${k('YARD_OCCUPANCY')?.total ?? 0}`, undefined, k('YARD_OCCUPANCY')?.value ?? 0)}
+          {tile(t('kpi.YARD_OCCUPANCY'), `${findKpi('YARD_OCCUPANCY')?.sub?.used ?? 0} / ${findKpi('YARD_OCCUPANCY')?.total ?? 0}`, undefined, findKpi('YARD_OCCUPANCY')?.value ?? 0)}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-2">
           {tile(t('v.site.stock'), (stock?.value ?? 0).toLocaleString('en-US'), `/ ${(stock?.total ?? 0).toLocaleString('en-US')}`, stock?.total ? ((stock.value ?? 0) / stock.total) * 100 : 0)}
           {tile(t('v.site.bays'), busyDocks, `/ ${snapshot.docks.length} ${t('v.site.busy')}`, snapshot.docks.length ? (busyDocks / snapshot.docks.length) * 100 : 0)}
-          {tile(t('v.site.outboundToday'), k('OUTBOUND_TODAY')?.value ?? 0, t('v.site.trucks'))}
-          {tile(t('v.site.putaways'), k('PUTAWAY_COMPLETED')?.value ?? 0, t('v.pallets'))}
+          {tile(t('v.site.outboundToday'), findKpi('OUTBOUND_TODAY')?.value ?? 0, t('v.site.trucks'))}
+          {tile(t('v.site.putaways'), findKpi('PUTAWAY_COMPLETED')?.value ?? 0, t('v.pallets'))}
         </div>
       )}
       {featured.length > 0 ? (
@@ -426,13 +426,13 @@ function SiteInspector({ snapshot }: { snapshot: SiteSnapshot }) {
             <span className="font-semibold">{t('v.site.inventory')}</span>
             <span className="text-muted">{t('v.units')}</span>
           </div>
-          {featured.map((a) => (
-            <div key={a.sku.id} className="flex items-center gap-2.5 py-[5px] text-[13px]">
-              <SkuIcon code={a.sku.code} size={20} />
-              <span className="flex-1 truncate">{a.sku.name}</span>
-              <span className="tabular w-14 text-right font-semibold">{Number(a.available).toLocaleString('en-US')}</span>
-              <Badge tone={a.lowStock ? 'warn' : 'ok'} className="w-[74px] justify-center">
-                {a.lowStock ? t('v.site.lowStock') : t('v.site.inStock')}
+          {featured.map((skuAvailability) => (
+            <div key={skuAvailability.sku.id} className="flex items-center gap-2.5 py-[5px] text-[13px]">
+              <SkuIcon code={skuAvailability.sku.code} size={20} />
+              <span className="flex-1 truncate">{skuAvailability.sku.name}</span>
+              <span className="tabular w-14 text-right font-semibold">{Number(skuAvailability.available).toLocaleString('en-US')}</span>
+              <Badge tone={skuAvailability.lowStock ? 'warn' : 'ok'} className="w-[74px] justify-center">
+                {skuAvailability.lowStock ? t('v.site.lowStock') : t('v.site.inStock')}
               </Badge>
             </div>
           ))}
@@ -444,14 +444,14 @@ function SiteInspector({ snapshot }: { snapshot: SiteSnapshot }) {
             <span className="font-semibold">{t('v.site.fleet')}</span>
             <span className="text-muted">{t('v.site.working', { n: working.length, t: snapshot.forklifts.length })}</span>
           </div>
-          {working.slice(0, 1).map((f) => (
-            <button key={f.id} onClick={() => select({ siteId: snapshot.site.id, type: 'forklift', id: f.id })} className="flex w-full items-center gap-2 py-1 text-left text-[13px]">
-              <span className="w-12 font-semibold">{f.code}</span>
-              <span className="flex-1 truncate text-muted">{f.taskSummary}</span>
+          {working.slice(0, 1).map((forklift) => (
+            <button key={forklift.id} onClick={() => select({ siteId: snapshot.site.id, type: 'forklift', id: forklift.id })} className="flex w-full items-center gap-2 py-1 text-left text-[13px]">
+              <span className="w-12 font-semibold">{forklift.code}</span>
+              <span className="flex-1 truncate text-muted">{forklift.taskSummary}</span>
               <span className="h-1.5 w-12 overflow-hidden rounded-full bg-slate-100">
-                <span className="block h-full rounded-full bg-ok" style={{ width: `${f.batteryPct ?? 0}%` }} />
+                <span className="block h-full rounded-full bg-ok" style={{ width: `${forklift.batteryPct ?? 0}%` }} />
               </span>
-              <span className="tabular w-8 text-right text-xs text-muted">{f.batteryPct ?? '—'}%</span>
+              <span className="tabular w-8 text-right text-xs text-muted">{forklift.batteryPct ?? '—'}%</span>
             </button>
           ))}
         </div>
@@ -463,9 +463,9 @@ function SiteInspector({ snapshot }: { snapshot: SiteSnapshot }) {
 /** Xe lưu bãi chọn từ bản đồ (UC-04 → UC-07). */
 function VehicleInspector({ snapshot, id, timeZone }: { snapshot: SiteSnapshot; id: string; timeZone: string }) {
   const { t } = useTranslation();
-  const select = useScene((s) => s.select);
+  const select = useScene((state) => state.select);
   const { data: stay } = useVehicleStay(snapshot.site.id, id);
-  const snap = snapshot.vehicles.find((v) => v.stayId === id);
+  const snap = snapshot.vehicles.find((vehicle) => vehicle.stayId === id);
   if (!stay && !snap) return null;
   const status = stay?.status ?? snap!.status;
   return (
@@ -485,7 +485,7 @@ function VehicleInspector({ snapshot, id, timeZone }: { snapshot: SiteSnapshot; 
 
 /** Inspector đọc Business State (TanStack Query) theo selection (Zustand) — mục 18.4, UC-20. */
 export function Inspector({ snapshot, timeZone }: { snapshot: SiteSnapshot; timeZone: string }) {
-  const selection = useScene((s) => s.selection);
+  const selection = useScene((state) => state.selection);
   const sel = selection?.siteId === snapshot.site.id ? selection : null;
   return (
     <div className="card pointer-events-auto w-[376px] p-4">

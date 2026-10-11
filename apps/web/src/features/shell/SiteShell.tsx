@@ -21,21 +21,21 @@ export const useSiteContext = () => useOutletContext<SiteContext>();
 export function SiteShell() {
   const { siteCode = '' } = useParams();
   const { data: sites, isLoading } = useSites();
-  const site = sites?.find((s) => s.code === siteCode);
-  const setSite = useScene((s) => s.setSite);
-  const qc = useQueryClient();
+  const site = sites?.find((candidate) => candidate.code === siteCode);
+  const setSite = useScene((state) => state.setSite);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!site) return;
     const previous = useScene.getState().siteId;
-    if (previous && previous !== site.id) void qc.cancelQueries({ queryKey: ['site', previous] });
+    if (previous && previous !== site.id) void queryClient.cancelQueries({ queryKey: ['site', previous] });
     setSite(site.id);
     try {
       localStorage.setItem('wt.lastSite', site.code);
     } catch {
       /* bỏ qua */
     }
-  }, [site, setSite, qc]);
+  }, [site, setSite, queryClient]);
 
   useSiteRealtime(site?.id);
 

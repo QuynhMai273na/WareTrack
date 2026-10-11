@@ -16,11 +16,11 @@ import { useAuth } from '@/stores/auth';
 import { useSiteContext } from '../shell/SiteShell';
 
 const TONE: Record<string, BadgeTone> = { DRAFT: 'neutral', CONFIRMED: 'info', ALLOCATING: 'info', PICKING: 'info', SHIPPED: 'ok', PARTIALLY_SHIPPED: 'warn', CANCELLED: 'neutral' };
-const qty = (v: string) => Number(v).toLocaleString();
+const qty = (amount: string) => Number(amount).toLocaleString();
 
 function CreateOrderDialog({ siteId, onClose, onCreated }: { siteId: string; onClose: () => void; onCreated: (id: string) => void }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { data: skus } = useSkus();
   const { data: customers } = usePartners('CUSTOMER');
   const { data: visits } = useVisits(siteId, 'SCHEDULED,AT_GATE,WAITING,DOCK_ASSIGNED,AT_DOCK');
@@ -29,7 +29,7 @@ function CreateOrderDialog({ siteId, onClose, onCreated }: { siteId: string; onC
   const [visitId, setVisitId] = useState('');
   const [lines, setLines] = useState([{ skuId: '', orderedQty: '' }]);
   const [key] = useState(() => crypto.randomUUID());
-  const m = useMutation({
+  const createOrder = useMutation({
     mutationFn: () =>
       api<OutboundOrderDetail>(`/sites/${siteId}/outbound-orders`, {
         method: 'POST',
@@ -39,76 +39,76 @@ function CreateOrderDialog({ siteId, onClose, onCreated }: { siteId: string; onC
           ...(destination ? { destinationText: destination } : {}),
           ...(visitId ? { truckVisitId: visitId } : {}),
           plannedDispatchAt: new Date(Date.now() + 60 * 60_000).toISOString(),
-          lines: lines.filter((l) => l.skuId && l.orderedQty),
+          lines: lines.filter((line) => line.skuId && line.orderedQty),
         },
       }),
-    onSuccess: (o) => {
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'shipments'] });
-      onCreated(o.id);
+    onSuccess: (order) => {
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'shipments'] });
+      onCreated(order.id);
       onClose();
     },
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={t('flows.newOutbound')} className="w-[min(92vw,560px)]">
-      <form className="space-y-3" onSubmit={(e) => (e.preventDefault(), m.mutate())}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={t('flows.newOutbound')} className="w-[min(92vw,560px)]">
+      <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), createOrder.mutate())}>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>{t('inspector.customer')}</Label>
-            <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+            <Select value={customerId} onChange={(event) => setCustomerId(event.target.value)}>
               <option value="">—</option>
-              {customers?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+              {customers?.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
                 </option>
               ))}
             </Select>
           </div>
           <div>
             <Label>{t('inspector.destination')}</Label>
-            <Input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Philadelphia, PA" />
+            <Input value={destination} onChange={(event) => setDestination(event.target.value)} placeholder="Philadelphia, PA" />
           </div>
         </div>
         <div>
           <Label>{t('flows.truckVisit')}</Label>
-          <Select value={visitId} onChange={(e) => setVisitId(e.target.value)}>
+          <Select value={visitId} onChange={(event) => setVisitId(event.target.value)}>
             <option value="">—</option>
             {visits
-              ?.filter((v) => v.direction !== 'INBOUND')
-              .map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.truck.code} · {t(`status.${v.status}`)} {v.dock ? `· ${v.dock.code}` : ''}
+              ?.filter((visit) => visit.direction !== 'INBOUND')
+              .map((visit) => (
+                <option key={visit.id} value={visit.id}>
+                  {visit.truck.code} · {t(`status.${visit.status}`)} {visit.dock ? `· ${visit.dock.code}` : ''}
                 </option>
               ))}
           </Select>
         </div>
         <div className="space-y-2">
           <Label>{t('flows.lines')}</Label>
-          {lines.map((l, i) => (
-            <div key={i} className="flex gap-2">
-              <Select value={l.skuId} onChange={(e) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, skuId: e.target.value } : x)))}>
+          {lines.map((line, lineIndex) => (
+            <div key={lineIndex} className="flex gap-2">
+              <Select value={line.skuId} onChange={(event) => setLines((prevLines) => prevLines.map((entry, entryIndex) => (entryIndex === lineIndex ? { ...entry, skuId: event.target.value } : entry)))}>
                 <option value="">SKU…</option>
-                {skus?.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.code})
+                {skus?.map((sku) => (
+                  <option key={sku.id} value={sku.id}>
+                    {sku.name} ({sku.code})
                   </option>
                 ))}
               </Select>
-              <Input className="w-28" placeholder="Qty" value={l.orderedQty} onChange={(e) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, orderedQty: e.target.value } : x)))} />
-              <Button type="button" variant="ghost" size="icon" onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}>
+              <Input className="w-28" placeholder="Qty" value={line.orderedQty} onChange={(event) => setLines((prevLines) => prevLines.map((entry, entryIndex) => (entryIndex === lineIndex ? { ...entry, orderedQty: event.target.value } : entry)))} />
+              <Button type="button" variant="ghost" size="icon" onClick={() => setLines((prevLines) => prevLines.filter((_, entryIndex) => entryIndex !== lineIndex))}>
                 <Trash2 size={14} />
               </Button>
             </div>
           ))}
-          <Button type="button" variant="outline" size="sm" onClick={() => setLines((ls) => [...ls, { skuId: '', orderedQty: '' }])}>
+          <Button type="button" variant="outline" size="sm" onClick={() => setLines((prevLines) => [...prevLines, { skuId: '', orderedQty: '' }])}>
             <Plus size={14} /> {t('flows.addLine')}
           </Button>
         </div>
-        {m.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(m.error)}</p> : null}
+        {createOrder.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(createOrder.error)}</p> : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={m.isPending}>
+          <Button type="submit" disabled={createOrder.isPending}>
             {t('common.confirm')}
           </Button>
         </div>
@@ -120,9 +120,9 @@ function CreateOrderDialog({ siteId, onClose, onCreated }: { siteId: string; onC
 /** Bảng điều khiển shipment xuất: xếp hàng bằng quét (UC-13), dispatch (UC-14), đã giao. */
 function ShipmentPanel({ siteId, shipmentId, timeZone }: { siteId: string; shipmentId: string; timeZone: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const qc = useQueryClient();
-  const { data: s } = useShipment(siteId, shipmentId);
+  const can = useAuth((state) => state.can);
+  const queryClient = useQueryClient();
+  const { data: shipment } = useShipment(siteId, shipmentId);
   const [hu, setHu] = useState('');
   const [dock, setDock] = useState('');
   const [seal, setSeal] = useState('');
@@ -132,61 +132,61 @@ function ShipmentPanel({ siteId, shipmentId, timeZone }: { siteId: string; shipm
     onSuccess: () => {
       setError(null);
       setHu('');
-      void qc.invalidateQueries({ queryKey: ['site', siteId] });
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId] });
     },
     onError: setError,
   });
-  if (!s) return null;
+  if (!shipment) return null;
   const now = () => new Date().toISOString();
   return (
     <div className="rounded-xl border border-line p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Truck size={18} className="text-brand" />
-        <span className="font-semibold">#{s.code}</span>
-        <Badge tone="info">{t(`shipmentStatus.${s.status}`)}</Badge>
+        <span className="font-semibold">#{shipment.code}</span>
+        <Badge tone="info">{t(`shipmentStatus.${shipment.status}`)}</Badge>
         <span className="text-sm text-muted">
-          {s.visit ? `${s.visit.truckCode} · ${s.visit.dockCode ?? '—'}` : t('flows.noVisit')} · {s.progress.done}/{s.progress.total} pallets
+          {shipment.visit ? `${shipment.visit.truckCode} · ${shipment.visit.dockCode ?? '—'}` : t('flows.noVisit')} · {shipment.progress.done}/{shipment.progress.total} pallets
         </span>
       </div>
       <div className="mb-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-        {s.items.map((i) => (
-          <div key={i.id} className={cn('rounded-lg border px-2 py-1.5 text-xs', i.loadedAt ? 'border-ok bg-ok-soft' : 'border-line')}>
-            <div className="font-semibold">{i.code}</div>
-            <div className="truncate text-muted">{i.label}</div>
-            <div className="text-[10px] text-muted">{i.loadedAt ? `✓ ${formatTime(i.loadedAt, timeZone)}` : i.lifecycle}</div>
+        {shipment.items.map((shipmentItem) => (
+          <div key={shipmentItem.id} className={cn('rounded-lg border px-2 py-1.5 text-xs', shipmentItem.loadedAt ? 'border-ok bg-ok-soft' : 'border-line')}>
+            <div className="font-semibold">{shipmentItem.code}</div>
+            <div className="truncate text-muted">{shipmentItem.label}</div>
+            <div className="text-[10px] text-muted">{shipmentItem.loadedAt ? `✓ ${formatTime(shipmentItem.loadedAt, timeZone)}` : shipmentItem.lifecycle}</div>
           </div>
         ))}
       </div>
-      {s.status === 'STAGED' && can(siteId, 'outbound.load') ? (
-        <Button size="sm" onClick={() => run.mutate({ path: '/loading/start', body: { expectedVersion: s.version } })} disabled={!s.visit}>
+      {shipment.status === 'STAGED' && can(siteId, 'outbound.load') ? (
+        <Button size="sm" onClick={() => run.mutate({ path: '/loading/start', body: { expectedVersion: shipment.version } })} disabled={!shipment.visit}>
           <PackageCheck size={14} /> {t('flows.startLoading')}
         </Button>
       ) : null}
-      {s.status === 'LOADING' && can(siteId, 'outbound.load') ? (
+      {shipment.status === 'LOADING' && can(siteId, 'outbound.load') ? (
         <form
           className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]"
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(event) => {
+            event.preventDefault();
             run.mutate({ path: '/load-scans', body: { huScan: { method: 'BARCODE', value: hu, scannedAt: now() }, dockScan: { method: dock.startsWith('WT:') ? 'QR' : 'MANUAL', value: dock, scannedAt: now() } } });
           }}
         >
           <ScanInput value={hu} onChange={setHu} placeholder="PAL-…" />
-          <Input value={dock} onChange={(e) => setDock(e.target.value)} placeholder={`Dock: ${s.visit?.dockCode ?? ''}`} />
+          <Input value={dock} onChange={(event) => setDock(event.target.value)} placeholder={`Dock: ${shipment.visit?.dockCode ?? ''}`} />
           <Button type="submit" disabled={!hu || !dock}>
             {t('flows.load')}
           </Button>
         </form>
       ) : null}
-      {s.status === 'LOADING' && can(siteId, 'outbound.dispatch') ? (
+      {shipment.status === 'LOADING' && can(siteId, 'outbound.dispatch') ? (
         <div className="mt-3 flex gap-2">
-          <Input className="w-48" value={seal} onChange={(e) => setSeal(e.target.value)} placeholder={t('flows.seal')} />
-          <Button onClick={() => run.mutate({ path: '/dispatch', body: { ...(seal ? { sealNumber: seal } : {}), expectedVersion: s.version } })}>
+          <Input className="w-48" value={seal} onChange={(event) => setSeal(event.target.value)} placeholder={t('flows.seal')} />
+          <Button onClick={() => run.mutate({ path: '/dispatch', body: { ...(seal ? { sealNumber: seal } : {}), expectedVersion: shipment.version } })}>
             <Send size={14} /> {t('flows.dispatch')}
           </Button>
         </div>
       ) : null}
-      {s.status === 'DISPATCHED' && can(siteId, 'shipment.deliver') ? (
-        <Button size="sm" variant="secondary" onClick={() => run.mutate({ path: '/deliver', body: { deliveredAt: new Date().toISOString(), expectedVersion: s.version } })}>
+      {shipment.status === 'DISPATCHED' && can(siteId, 'shipment.deliver') ? (
+        <Button size="sm" variant="secondary" onClick={() => run.mutate({ path: '/deliver', body: { deliveredAt: new Date().toISOString(), expectedVersion: shipment.version } })}>
           {t('flows.markDelivered')}
         </Button>
       ) : null}
@@ -199,15 +199,15 @@ function ShipmentPanel({ siteId, shipmentId, timeZone }: { siteId: string; shipm
 export function OutboundPage() {
   const { t } = useTranslation();
   const { siteId, timeZone } = useSiteContext();
-  const can = useAuth((s) => s.can);
-  const qc = useQueryClient();
+  const can = useAuth((state) => state.can);
+  const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const { data: orders } = useOutboundOrders(siteId);
   const [create, setCreate] = useState(false);
-  const selected = orders?.find((o) => o.id === params.get('order')) ?? orders?.[0];
+  const selected = orders?.find((order) => order.id === params.get('order')) ?? orders?.[0];
   const act = useMutation({
     mutationFn: ({ path, body }: { path: string; body: unknown }) => api(`/sites/${siteId}/outbound-orders/${selected!.id}${path}`, { method: 'POST', body }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['site', siteId] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['site', siteId] }),
     onError: (err) => window.alert(describeError(err)),
   });
   return (
@@ -223,14 +223,14 @@ export function OutboundPage() {
             ) : null}
           </div>
           <div className="space-y-1.5">
-            {orders?.map((o) => (
-              <button key={o.id} onClick={() => setParams({ order: o.id })} className={cn('w-full rounded-xl border p-3 text-left text-sm', selected?.id === o.id ? 'border-brand bg-brand-soft/50' : 'border-line')}>
+            {orders?.map((order) => (
+              <button key={order.id} onClick={() => setParams({ order: order.id })} className={cn('w-full rounded-xl border p-3 text-left text-sm', selected?.id === order.id ? 'border-brand bg-brand-soft/50' : 'border-line')}>
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold">{o.code}</span>
-                  <Badge tone={TONE[o.status]}>{o.status}</Badge>
+                  <span className="font-semibold">{order.code}</span>
+                  <Badge tone={TONE[order.status]}>{order.status}</Badge>
                 </div>
                 <div className="text-xs text-muted">
-                  {o.customer?.name ?? '—'} · {o.lines.length} {t('flows.lines').toLowerCase()} {o.shipment ? `· ${o.shipment.code} ${t(`shipmentStatus.${o.shipment.status}`)}` : ''}
+                  {order.customer?.name ?? '—'} · {order.lines.length} {t('flows.lines').toLowerCase()} {order.shipment ? `· ${order.shipment.code} ${t(`shipmentStatus.${order.shipment.status}`)}` : ''}
                 </div>
               </button>
             ))}
@@ -269,17 +269,17 @@ export function OutboundPage() {
                 </tr>
               </thead>
               <tbody>
-                {selected.lines.map((l) => (
-                  <tr key={l.id} className="border-b border-line/60">
+                {selected.lines.map((orderLine) => (
+                  <tr key={orderLine.id} className="border-b border-line/60">
                     <td className="py-2">
-                      {l.sku.name} <span className="text-xs text-muted">{l.sku.code}</span>
+                      {orderLine.sku.name} <span className="text-xs text-muted">{orderLine.sku.code}</span>
                     </td>
-                    <td className="tabular text-right">{qty(l.orderedQty)}</td>
-                    <td className="tabular text-right">{qty(l.allocatedQty)}</td>
-                    <td className="tabular text-right">{qty(l.pickedQty)}</td>
-                    <td className="tabular text-right">{qty(l.shippedQty)}</td>
+                    <td className="tabular text-right">{qty(orderLine.orderedQty)}</td>
+                    <td className="tabular text-right">{qty(orderLine.allocatedQty)}</td>
+                    <td className="tabular text-right">{qty(orderLine.pickedQty)}</td>
+                    <td className="tabular text-right">{qty(orderLine.shippedQty)}</td>
                     <td className="pl-3">
-                      <Badge tone={l.status.includes('PARTIALLY') ? 'warn' : l.status === 'SHIPPED' || l.status === 'PICKED' ? 'ok' : 'info'}>{l.status}</Badge>
+                      <Badge tone={orderLine.status.includes('PARTIALLY') ? 'warn' : orderLine.status === 'SHIPPED' || orderLine.status === 'PICKED' ? 'ok' : 'info'}>{orderLine.status}</Badge>
                     </td>
                   </tr>
                 ))}

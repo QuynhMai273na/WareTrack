@@ -16,13 +16,13 @@ import { useAuth } from '@/stores/auth';
 import { useSiteContext } from '../shell/SiteShell';
 
 const STATUS_TONE: Record<string, BadgeTone> = { AVAILABLE: 'ok', QC_HOLD: 'warn', QUARANTINE: 'bad', DAMAGED: 'bad' };
-const qty = (v: string) => Number(v).toLocaleString(undefined, { maximumFractionDigits: 3 });
+const qty = (amount: string) => Number(amount).toLocaleString(undefined, { maximumFractionDigits: 3 });
 
 function useInvalidateInventory(siteId: string) {
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   return () => {
-    void qc.invalidateQueries({ queryKey: ['site', siteId, 'inventory'] });
-    void qc.invalidateQueries({ queryKey: ['site', siteId, 'snapshot'] });
+    void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'inventory'] });
+    void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'snapshot'] });
   };
 }
 
@@ -39,26 +39,26 @@ function MoveDialog({ siteId, balance, onClose }: { siteId: string; balance: Bal
   const [key] = useState(() => crypto.randomUUID());
   const invalidate = useInvalidateInventory(siteId);
   const { data: hu } = useQuery({ queryKey: ['site', siteId, 'inventory', 'pallet', balance.handlingUnit?.id], queryFn: () => api<{ version: number }>(`/sites/${siteId}/pallets/${balance.handlingUnit!.id}`), enabled: !!balance.handlingUnit });
-  const m = useMutation({
+  const movePallet = useMutation({
     mutationFn: () => api(`/sites/${siteId}/pallets/${balance.handlingUnit!.id}/move`, { method: 'POST', idempotencyKey: key, body: { toLocationId: to, reason, ...(scan ? { scanDestination: scan } : {}), expectedVersion: hu?.version ?? 0 } }),
     onSuccess: () => {
       invalidate();
       onClose();
     },
   });
-  const target = locations?.find((l) => l.id === to);
+  const target = locations?.find((location) => location.id === to);
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={`${t('inventory.move')} ${balance.handlingUnit?.code ?? ''}`} description={`${balance.sku.name} · ${balance.location.code}`}>
-      <form className="space-y-3" onSubmit={(e) => (e.preventDefault(), m.mutate())}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={`${t('inventory.move')} ${balance.handlingUnit?.code ?? ''}`} description={`${balance.sku.name} · ${balance.location.code}`}>
+      <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), movePallet.mutate())}>
         <div>
           <Label>{t('inventory.destination')}</Label>
-          <Select value={to} onChange={(e) => setTo(e.target.value)} required>
+          <Select value={to} onChange={(event) => setTo(event.target.value)} required>
             <option value="">—</option>
             {locations
-              ?.filter((l) => l.id !== balance.location.id)
-              .map((l) => (
-                <option key={l.id} value={l.id} disabled={l.effectiveStatus === 'BLOCKED' || l.unitsUsed >= l.capacityUnits}>
-                  {l.code} · {l.locationType} · {l.unitsUsed}/{l.capacityUnits}
+              ?.filter((location) => location.id !== balance.location.id)
+              .map((location) => (
+                <option key={location.id} value={location.id} disabled={location.effectiveStatus === 'BLOCKED' || location.unitsUsed >= location.capacityUnits}>
+                  {location.code} · {location.locationType} · {location.unitsUsed}/{location.capacityUnits}
                 </option>
               ))}
           </Select>
@@ -69,14 +69,14 @@ function MoveDialog({ siteId, balance, onClose }: { siteId: string; balance: Bal
         </div>
         <div>
           <Label>{t('yard.reason')}</Label>
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} required minLength={3} />
+          <Input value={reason} onChange={(event) => setReason(event.target.value)} required minLength={3} />
         </div>
-        <ErrorBox error={m.error} />
+        <ErrorBox error={movePallet.error} />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={m.isPending || !to}>
+          <Button type="submit" disabled={movePallet.isPending || !to}>
             {t('common.confirm')}
           </Button>
         </div>
@@ -92,7 +92,7 @@ function AdjustDialog({ siteId, balance, onClose }: { siteId: string; balance: B
   const [note, setNote] = useState('');
   const [key] = useState(() => crypto.randomUUID());
   const invalidate = useInvalidateInventory(siteId);
-  const m = useMutation({
+  const requestAdjustment = useMutation({
     mutationFn: () => api(`/sites/${siteId}/inventory/adjustments`, { method: 'POST', idempotencyKey: key, body: { balanceId: balance.id, qtyDelta: delta, reasonCode, ...(note ? { note } : {}) } }),
     onSuccess: () => {
       invalidate();
@@ -100,19 +100,19 @@ function AdjustDialog({ siteId, balance, onClose }: { siteId: string; balance: B
     },
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={t('inventory.requestAdjustment')} description={`${balance.sku.name} · ${balance.location.code} · ${qty(balance.qtyOnHand)} ${balance.sku.baseUom}`}>
-      <form className="space-y-3" onSubmit={(e) => (e.preventDefault(), m.mutate())}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={t('inventory.requestAdjustment')} description={`${balance.sku.name} · ${balance.location.code} · ${qty(balance.qtyOnHand)} ${balance.sku.baseUom}`}>
+      <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), requestAdjustment.mutate())}>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>{t('inventory.delta')} (±)</Label>
-            <Input value={delta} onChange={(e) => setDelta(e.target.value)} placeholder="-2" required pattern="-?\d+(\.\d{1,3})?" />
+            <Input value={delta} onChange={(event) => setDelta(event.target.value)} placeholder="-2" required pattern="-?\d+(\.\d{1,3})?" />
           </div>
           <div>
             <Label>{t('yard.reason')}</Label>
-            <Select value={reasonCode} onChange={(e) => setReasonCode(e.target.value)}>
-              {ADJUSTMENT_REASONS.map((r) => (
-                <option key={r} value={r}>
-                  {t(`inventory.reason.${r}`)}
+            <Select value={reasonCode} onChange={(event) => setReasonCode(event.target.value)}>
+              {ADJUSTMENT_REASONS.map((reasonOption) => (
+                <option key={reasonOption} value={reasonOption}>
+                  {t(`inventory.reason.${reasonOption}`)}
                 </option>
               ))}
             </Select>
@@ -120,15 +120,15 @@ function AdjustDialog({ siteId, balance, onClose }: { siteId: string; balance: B
         </div>
         <div>
           <Label>Note</Label>
-          <Input value={note} onChange={(e) => setNote(e.target.value)} />
+          <Input value={note} onChange={(event) => setNote(event.target.value)} />
         </div>
         <p className="text-xs text-muted">{t('inventory.thresholdHint')}</p>
-        <ErrorBox error={m.error} />
+        <ErrorBox error={requestAdjustment.error} />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={m.isPending}>
+          <Button type="submit" disabled={requestAdjustment.isPending}>
             {t('common.confirm')}
           </Button>
         </div>
@@ -142,38 +142,38 @@ function OverviewTab({ siteId }: { siteId: string }) {
   const { data } = useAvailability(siteId);
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {data?.map((a) => {
-        const pct = Number(a.onHand) ? (Number(a.available) / Number(a.onHand)) * 100 : 0;
+      {data?.map((skuAvailability) => {
+        const pct = Number(skuAvailability.onHand) ? (Number(skuAvailability.available) / Number(skuAvailability.onHand)) * 100 : 0;
         return (
-          <div key={a.sku.id} className="rounded-xl border border-line p-4">
+          <div key={skuAvailability.sku.id} className="rounded-xl border border-line p-4">
             <div className="mb-2 flex items-start justify-between gap-2">
               <div>
-                <div className="font-semibold">{a.sku.name}</div>
-                <div className="text-xs text-muted">{a.sku.code}</div>
+                <div className="font-semibold">{skuAvailability.sku.name}</div>
+                <div className="text-xs text-muted">{skuAvailability.sku.code}</div>
               </div>
-              <Badge tone={a.lowStock ? 'warn' : 'ok'}>{a.lowStock ? t('inventory.lowStock') : t('inventory.inStock')}</Badge>
+              <Badge tone={skuAvailability.lowStock ? 'warn' : 'ok'}>{skuAvailability.lowStock ? t('inventory.lowStock') : t('inventory.inStock')}</Badge>
             </div>
             <div className="tabular text-2xl font-bold">
-              {qty(a.available)} <span className="text-sm font-medium text-muted">{a.sku.baseUom} {t('inventory.available')}</span>
+              {qty(skuAvailability.available)} <span className="text-sm font-medium text-muted">{skuAvailability.sku.baseUom} {t('inventory.available')}</span>
             </div>
             <div className="my-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
               <div className="h-full rounded-full bg-ok" style={{ width: `${pct}%` }} />
             </div>
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
               <span>
-                {t('inventory.onHand')}: <b className="text-ink">{qty(a.onHand)}</b>
+                {t('inventory.onHand')}: <b className="text-ink">{qty(skuAvailability.onHand)}</b>
               </span>
               <span>
-                {t('inventory.reserved')}: <b className="text-ink">{qty(a.reserved)}</b>
+                {t('inventory.reserved')}: <b className="text-ink">{qty(skuAvailability.reserved)}</b>
               </span>
-              {Object.entries(a.byStatus)
-                .filter(([s]) => s !== 'AVAILABLE')
-                .map(([s, v]) => (
-                  <span key={s}>
-                    {s}: <b className="text-bad">{qty(v)}</b>
+              {Object.entries(skuAvailability.byStatus)
+                .filter(([status]) => status !== 'AVAILABLE')
+                .map(([status, amount]) => (
+                  <span key={status}>
+                    {status}: <b className="text-bad">{qty(amount)}</b>
                   </span>
                 ))}
-              {a.lowStockThreshold ? <span>min {qty(a.lowStockThreshold)}</span> : null}
+              {skuAvailability.lowStockThreshold ? <span>min {qty(skuAvailability.lowStockThreshold)}</span> : null}
             </div>
           </div>
         );
@@ -184,16 +184,16 @@ function OverviewTab({ siteId }: { siteId: string }) {
 
 function BalancesTab({ siteId }: { siteId: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const [q, setQ] = useState('');
-  const { data } = useBalances(siteId, q);
+  const can = useAuth((state) => state.can);
+  const [search, setSearch] = useState('');
+  const { data } = useBalances(siteId, search);
   const [move, setMove] = useState<BalanceDto | null>(null);
   const [adjust, setAdjust] = useState<BalanceDto | null>(null);
   return (
     <>
       <div className="relative mb-3 w-72">
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
-        <Input className="pl-8" placeholder={t('inventory.search')} value={q} onChange={(e) => setQ(e.target.value)} />
+        <Input className="pl-8" placeholder={t('inventory.search')} value={search} onChange={(event) => setSearch(event.target.value)} />
       </div>
       <div className="overflow-auto">
         <table className="w-full text-sm">
@@ -211,32 +211,32 @@ function BalancesTab({ siteId }: { siteId: string }) {
             </tr>
           </thead>
           <tbody>
-            {data?.map((b) => (
-              <tr key={b.id} className="border-b border-line/60">
+            {data?.map((balance) => (
+              <tr key={balance.id} className="border-b border-line/60">
                 <td className="py-2">
-                  <div className="font-medium">{b.sku.name}</div>
-                  <div className="text-xs text-muted">{b.sku.code}</div>
+                  <div className="font-medium">{balance.sku.name}</div>
+                  <div className="text-xs text-muted">{balance.sku.code}</div>
                 </td>
-                <td>{b.location.code}</td>
-                <td>{b.handlingUnit?.code ?? '—'}</td>
+                <td>{balance.location.code}</td>
+                <td>{balance.handlingUnit?.code ?? '—'}</td>
                 <td className="text-xs">
-                  {b.lot?.lotNumber ?? '—'}
-                  {b.lot?.expiresOn ? <div className="text-muted">exp {b.lot.expiresOn}</div> : null}
+                  {balance.lot?.lotNumber ?? '—'}
+                  {balance.lot?.expiresOn ? <div className="text-muted">exp {balance.lot.expiresOn}</div> : null}
                 </td>
                 <td>
-                  <Badge tone={STATUS_TONE[b.stockStatus]}>{b.stockStatus}</Badge>
+                  <Badge tone={STATUS_TONE[balance.stockStatus]}>{balance.stockStatus}</Badge>
                 </td>
-                <td className="tabular text-right">{qty(b.qtyOnHand)}</td>
-                <td className="tabular text-right">{qty(b.qtyReserved)}</td>
-                <td className="tabular text-right font-semibold">{qty(b.qtyAvailable)}</td>
+                <td className="tabular text-right">{qty(balance.qtyOnHand)}</td>
+                <td className="tabular text-right">{qty(balance.qtyReserved)}</td>
+                <td className="tabular text-right font-semibold">{qty(balance.qtyAvailable)}</td>
                 <td className="whitespace-nowrap text-right">
-                  {b.handlingUnit && can(siteId, 'inventory.move') ? (
-                    <Button size="iconSm" variant="ghost" title={t('inventory.move')} onClick={() => setMove(b)}>
+                  {balance.handlingUnit && can(siteId, 'inventory.move') ? (
+                    <Button size="iconSm" variant="ghost" title={t('inventory.move')} onClick={() => setMove(balance)}>
                       <ArrowRightLeft size={14} />
                     </Button>
                   ) : null}
                   {can(siteId, 'inventory.adjust.request') ? (
-                    <Button size="iconSm" variant="ghost" title={t('inventory.requestAdjustment')} onClick={() => setAdjust(b)}>
+                    <Button size="iconSm" variant="ghost" title={t('inventory.requestAdjustment')} onClick={() => setAdjust(balance)}>
                       <SlidersHorizontal size={14} />
                     </Button>
                   ) : null}
@@ -254,7 +254,7 @@ function BalancesTab({ siteId }: { siteId: string }) {
 
 function LedgerTab({ siteId, timeZone }: { siteId: string; timeZone: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
+  const can = useAuth((state) => state.can);
   const { data } = useLedger(siteId);
   const invalidate = useInvalidateInventory(siteId);
   const reverse = useMutation({
@@ -280,28 +280,28 @@ function LedgerTab({ siteId, timeZone }: { siteId: string; timeZone: string }) {
           </tr>
         </thead>
         <tbody>
-          {data?.map((x) => (
-            <tr key={x.id} className="border-b border-line/60">
-              <td className="tabular py-2 text-muted">{x.id}</td>
-              <td className="tabular">{formatTime(x.occurredAt, timeZone)}</td>
+          {data?.map((entry) => (
+            <tr key={entry.id} className="border-b border-line/60">
+              <td className="tabular py-2 text-muted">{entry.id}</td>
+              <td className="tabular">{formatTime(entry.occurredAt, timeZone)}</td>
               <td>
-                <Badge tone={x.txType.includes('REVERSAL') || x.reversesTxId ? 'warn' : x.txType === 'ISSUE' || x.txType === 'ADJUSTMENT_OUT' ? 'bad' : 'info'}>{x.txType}</Badge>
+                <Badge tone={entry.txType.includes('REVERSAL') || entry.reversesTxId ? 'warn' : entry.txType === 'ISSUE' || entry.txType === 'ADJUSTMENT_OUT' ? 'bad' : 'info'}>{entry.txType}</Badge>
               </td>
-              <td>{x.sku.code}</td>
-              <td>{x.handlingUnitCode ?? '—'}</td>
+              <td>{entry.sku.code}</td>
+              <td>{entry.handlingUnitCode ?? '—'}</td>
               <td className="text-xs">
-                {x.fromLocation ?? x.fromStatus ?? '·'} → {x.toLocation ?? x.toStatus ?? '·'}
+                {entry.fromLocation ?? entry.fromStatus ?? '·'} → {entry.toLocation ?? entry.toStatus ?? '·'}
               </td>
-              <td className="tabular text-right">{qty(x.quantity)}</td>
-              <td className="text-xs text-muted">{x.referenceType}</td>
-              <td className="text-xs">{x.actor}</td>
+              <td className="tabular text-right">{qty(entry.quantity)}</td>
+              <td className="text-xs text-muted">{entry.referenceType}</td>
+              <td className="text-xs">{entry.actor}</td>
               <td className="text-right">
-                {can(siteId, 'inventory.reversal') && !x.reversedByTxId && !x.reversesTxId && ['RECEIPT', 'ISSUE', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT'].includes(x.txType) ? (
-                  <Button size="iconSm" variant="ghost" title={t('inventory.reverse')} onClick={() => reverse.mutate(x.id)}>
+                {can(siteId, 'inventory.reversal') && !entry.reversedByTxId && !entry.reversesTxId && ['RECEIPT', 'ISSUE', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT'].includes(entry.txType) ? (
+                  <Button size="iconSm" variant="ghost" title={t('inventory.reverse')} onClick={() => reverse.mutate(entry.id)}>
                     <RotateCcw size={14} />
                   </Button>
-                ) : x.reversedByTxId ? (
-                  <span className="text-xs text-muted">↩ {x.reversedByTxId}</span>
+                ) : entry.reversedByTxId ? (
+                  <span className="text-xs text-muted">↩ {entry.reversedByTxId}</span>
                 ) : null}
               </td>
             </tr>
@@ -314,45 +314,45 @@ function LedgerTab({ siteId, timeZone }: { siteId: string; timeZone: string }) {
 
 function AdjustmentsTab({ siteId, timeZone }: { siteId: string; timeZone: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const me = useAuth((s) => s.me);
+  const can = useAuth((state) => state.can);
+  const me = useAuth((state) => state.me);
   const { data } = useAdjustments(siteId);
   const invalidate = useInvalidateInventory(siteId);
   const decide = useMutation({
-    mutationFn: ({ a, approve }: { a: AdjustmentDto; approve: boolean }) => api(`/sites/${siteId}/inventory/adjustments/${a.id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { expectedVersion: a.version } }),
+    mutationFn: ({ adjustment, approve }: { adjustment: AdjustmentDto; approve: boolean }) => api(`/sites/${siteId}/inventory/adjustments/${adjustment.id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { expectedVersion: adjustment.version } }),
     onSuccess: invalidate,
     onError: (err) => window.alert(describeError(err)),
   });
   return (
     <div className="space-y-2">
       {data?.length === 0 ? <p className="text-sm text-muted">—</p> : null}
-      {data?.map((a) => (
-        <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3 text-sm">
+      {data?.map((adjustment) => (
+        <div key={adjustment.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3 text-sm">
           <div className="w-28">
-            <div className="font-semibold">{a.code}</div>
-            <div className="text-xs text-muted">{formatTime(a.createdAt, timeZone)}</div>
+            <div className="font-semibold">{adjustment.code}</div>
+            <div className="text-xs text-muted">{formatTime(adjustment.createdAt, timeZone)}</div>
           </div>
           <div className="min-w-48 flex-1">
             <div className="font-medium">
-              {a.balance.sku.name} · {a.balance.location.code} {a.balance.handlingUnit ? `· ${a.balance.handlingUnit.code}` : ''}
+              {adjustment.balance.sku.name} · {adjustment.balance.location.code} {adjustment.balance.handlingUnit ? `· ${adjustment.balance.handlingUnit.code}` : ''}
             </div>
             <div className="text-xs text-muted">
-              {t(`inventory.reason.${a.reasonCode}`)} {a.note ? `— ${a.note}` : ''} · {a.requestedBy.fullName}
+              {t(`inventory.reason.${adjustment.reasonCode}`)} {adjustment.note ? `— ${adjustment.note}` : ''} · {adjustment.requestedBy.fullName}
             </div>
           </div>
-          <div className={`tabular w-20 text-right text-base font-bold ${Number(a.qtyDelta) < 0 ? 'text-bad' : 'text-ok'}`}>{Number(a.qtyDelta) > 0 ? `+${qty(a.qtyDelta)}` : qty(a.qtyDelta)}</div>
-          {a.requiresManager ? (
+          <div className={`tabular w-20 text-right text-base font-bold ${Number(adjustment.qtyDelta) < 0 ? 'text-bad' : 'text-ok'}`}>{Number(adjustment.qtyDelta) > 0 ? `+${qty(adjustment.qtyDelta)}` : qty(adjustment.qtyDelta)}</div>
+          {adjustment.requiresManager ? (
             <Badge tone="warn">
               <ShieldAlert size={12} /> Site Manager
             </Badge>
           ) : null}
-          <Badge tone={a.status === 'APPLIED' ? 'ok' : a.status === 'REJECTED' ? 'bad' : 'info'}>{a.status}</Badge>
-          {a.status === 'PENDING_APPROVAL' && can(siteId, 'inventory.adjust.approve') && a.requestedBy.id !== me?.user.id ? (
+          <Badge tone={adjustment.status === 'APPLIED' ? 'ok' : adjustment.status === 'REJECTED' ? 'bad' : 'info'}>{adjustment.status}</Badge>
+          {adjustment.status === 'PENDING_APPROVAL' && can(siteId, 'inventory.adjust.approve') && adjustment.requestedBy.id !== me?.user.id ? (
             <div className="flex gap-1">
-              <Button size="sm" onClick={() => decide.mutate({ a, approve: true })}>
+              <Button size="sm" onClick={() => decide.mutate({ adjustment, approve: true })}>
                 <Check size={14} /> {t('inventory.approve')}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => decide.mutate({ a, approve: false })}>
+              <Button size="sm" variant="outline" onClick={() => decide.mutate({ adjustment, approve: false })}>
                 <X size={14} />
               </Button>
             </div>
@@ -365,14 +365,14 @@ function AdjustmentsTab({ siteId, timeZone }: { siteId: string; timeZone: string
 
 function CountsTab({ siteId }: { siteId: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const qc = useQueryClient();
+  const can = useAuth((state) => state.can);
+  const queryClient = useQueryClient();
   const { data: counts } = useQuery({ queryKey: ['site', siteId, 'inventory', 'counts'], queryFn: () => api<StockCountDto[]>(`/sites/${siteId}/stock-counts`) });
   const { data: zones } = useQuery({ queryKey: ['site', siteId, 'zones'], queryFn: () => api<Array<{ id: string; code: string; name: string; zoneType: string }>>(`/sites/${siteId}/zones`) });
   const [open, setOpen] = useState<string | null>(null);
   const [zone, setZone] = useState('');
   const { data: detail } = useQuery({ queryKey: ['site', siteId, 'inventory', 'count', open], queryFn: () => api<StockCountDto & { lines: StockCountLineDto[] }>(`/sites/${siteId}/stock-counts/${open}`), enabled: !!open });
-  const refresh = () => void qc.invalidateQueries({ queryKey: ['site', siteId, 'inventory'] });
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'inventory'] });
   const act = useMutation({
     mutationFn: ({ path, method = 'POST', body = {} }: { path: string; method?: 'POST' | 'PUT'; body?: unknown }) => api(`/sites/${siteId}/stock-counts${path}`, { method, body }),
     onSuccess: refresh,
@@ -383,13 +383,13 @@ function CountsTab({ siteId }: { siteId: string }) {
       <div className="space-y-2">
         {can(siteId, 'inventory.count.manage') ? (
           <div className="flex gap-2">
-            <Select value={zone} onChange={(e) => setZone(e.target.value)}>
+            <Select value={zone} onChange={(event) => setZone(event.target.value)}>
               <option value="">Zone…</option>
               {zones
-                ?.filter((z) => ['WAREHOUSE', 'STAGING', 'QUARANTINE'].includes(z.zoneType))
-                .map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.code} · {z.name}
+                ?.filter((zoneOption) => ['WAREHOUSE', 'STAGING', 'QUARANTINE'].includes(zoneOption.zoneType))
+                .map((zoneOption) => (
+                  <option key={zoneOption.id} value={zoneOption.id}>
+                    {zoneOption.code} · {zoneOption.name}
                   </option>
                 ))}
             </Select>
@@ -398,14 +398,14 @@ function CountsTab({ siteId }: { siteId: string }) {
             </Button>
           </div>
         ) : null}
-        {counts?.map((c) => (
-          <button key={c.id} onClick={() => setOpen(c.id)} className={`w-full rounded-xl border p-3 text-left text-sm ${open === c.id ? 'border-brand bg-brand-soft/50' : 'border-line'}`}>
+        {counts?.map((stockCount) => (
+          <button key={stockCount.id} onClick={() => setOpen(stockCount.id)} className={`w-full rounded-xl border p-3 text-left text-sm ${open === stockCount.id ? 'border-brand bg-brand-soft/50' : 'border-line'}`}>
             <div className="flex items-center justify-between">
-              <span className="font-semibold">{c.code}</span>
-              <Badge tone={c.status === 'COMPLETED' ? 'ok' : c.status === 'CANCELLED' ? 'neutral' : 'info'}>{c.status}</Badge>
+              <span className="font-semibold">{stockCount.code}</span>
+              <Badge tone={stockCount.status === 'COMPLETED' ? 'ok' : stockCount.status === 'CANCELLED' ? 'neutral' : 'info'}>{stockCount.status}</Badge>
             </div>
             <div className="text-xs text-muted">
-              {c.countedCount}/{c.lineCount} {t('inventory.counted')} · {c.varianceCount} variance {c.blind ? '· blind' : ''}
+              {stockCount.countedCount}/{stockCount.lineCount} {t('inventory.counted')} · {stockCount.varianceCount} variance {stockCount.blind ? '· blind' : ''}
             </div>
           </button>
         ))}
@@ -434,24 +434,24 @@ function CountsTab({ siteId }: { siteId: string }) {
               </tr>
             </thead>
             <tbody>
-              {detail.lines.map((l) => (
-                <tr key={l.id} className="border-b border-line/60">
-                  <td className="py-1.5">{l.location}</td>
-                  <td>{l.sku.name}</td>
-                  <td>{l.handlingUnitCode ?? '—'}</td>
-                  <td className="tabular text-right text-muted">{l.systemQty !== null ? qty(l.systemQty) : '•••'}</td>
+              {detail.lines.map((countLine) => (
+                <tr key={countLine.id} className="border-b border-line/60">
+                  <td className="py-1.5">{countLine.location}</td>
+                  <td>{countLine.sku.name}</td>
+                  <td>{countLine.handlingUnitCode ?? '—'}</td>
+                  <td className="tabular text-right text-muted">{countLine.systemQty !== null ? qty(countLine.systemQty) : '•••'}</td>
                   <td className="text-right">
                     {detail.status === 'IN_PROGRESS' && can(siteId, 'inventory.count.execute') ? (
                       <input
                         className="h-7 w-20 rounded border border-line px-2 text-right"
-                        defaultValue={l.countedQty ?? ''}
-                        onBlur={(e) => e.target.value && e.target.value !== l.countedQty && act.mutate({ path: `/${detail.id}/lines/${l.id}`, method: 'PUT', body: { countedQty: e.target.value } })}
+                        defaultValue={countLine.countedQty ?? ''}
+                        onBlur={(event) => event.target.value && event.target.value !== countLine.countedQty && act.mutate({ path: `/${detail.id}/lines/${countLine.id}`, method: 'PUT', body: { countedQty: event.target.value } })}
                       />
                     ) : (
-                      <span className="tabular">{l.countedQty !== null ? qty(l.countedQty) : '—'}</span>
+                      <span className="tabular">{countLine.countedQty !== null ? qty(countLine.countedQty) : '—'}</span>
                     )}
                   </td>
-                  <td className={`tabular text-right ${Number(l.variance) ? 'font-semibold text-bad' : 'text-muted'}`}>{l.variance ?? ''}</td>
+                  <td className={`tabular text-right ${Number(countLine.variance) ? 'font-semibold text-bad' : 'text-muted'}`}>{countLine.variance ?? ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -469,7 +469,7 @@ export function InventoryPage() {
   const { t } = useTranslation();
   const { siteId, timeZone } = useSiteContext();
   const { data: pending } = useAdjustments(siteId);
-  const pendingCount = pending?.filter((a) => a.status === 'PENDING_APPROVAL').length ?? 0;
+  const pendingCount = pending?.filter((adjustment) => adjustment.status === 'PENDING_APPROVAL').length ?? 0;
   return (
     <div className="h-full overflow-auto px-4 pb-6 pt-[76px]">
       <div className="card mx-auto max-w-7xl p-4">

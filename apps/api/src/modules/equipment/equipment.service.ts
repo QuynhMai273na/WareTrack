@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Equipment, EquipmentStatus } from '@prisma/client';
-import { ErrorCode, type SnapshotForklift } from '@waretrack/shared-schemas';
+import { type CreateEquipmentRequest, ErrorCode, type SnapshotForklift, type UpdateEquipmentRequest } from '@waretrack/shared-schemas';
 import { AuditService } from '../../platform/audit/audit.service';
 import { DomainError } from '../../platform/errors/domain-error';
 import { OutboxService } from '../../platform/outbox/outbox.service';
@@ -45,16 +45,16 @@ export class EquipmentService {
   /** #158 — sạc / bảo trì / offline / sẵn sàng. */
   async changeStatus(siteId: string, id: string, to: EquipmentStatus, reason: string | undefined, expectedVersion: number) {
     return this.tx.run(async (tx) => {
-      const e = await tx.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
-      if (!e) throw DomainError.notFound('Equipment');
-      if (e.version !== expectedVersion) throw DomainError.concurrent();
-      if (!MANUAL[e.status]?.includes(to)) throw DomainError.invalidTransition('Equipment', e.status, to);
-      if (to === 'MAINTENANCE' && (e.status === 'ASSIGNED' || e.status === 'BUSY')) {
-        for (const hook of this.maintenanceHooks) await hook(tx, e, reason ?? 'Equipment breakdown');
+      const equipment = await tx.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
+      if (!equipment) throw DomainError.notFound('Equipment');
+      if (equipment.version !== expectedVersion) throw DomainError.concurrent();
+      if (!MANUAL[equipment.status]?.includes(to)) throw DomainError.invalidTransition('Equipment', equipment.status, to);
+      if (to === 'MAINTENANCE' && (equipment.status === 'ASSIGNED' || equipment.status === 'BUSY')) {
+        for (const hook of this.maintenanceHooks) await hook(tx, equipment, reason ?? 'Equipment breakdown');
       }
       const fresh = await tx.equipment.findUniqueOrThrow({ where: { id } });
       const updated = await this.setStatus(tx, siteId, id, to, { taskSummary: to === 'AVAILABLE' ? null : (reason ?? null), allowedFrom: [fresh.status], reason });
-      await this.audit.record(tx, { siteId, action: `EQUIPMENT_${to}`, entityType: 'Equipment', entityId: id, diff: { before: { status: e.status }, after: { status: to } }, reason: reason ?? null });
+      await this.audit.record(tx, { siteId, action: `EQUIPMENT_${to}`, entityType: 'Equipment', entityId: id, diff: { before: { status: equipment.status }, after: { status: to } }, reason: reason ?? null });
       return updated;
     });
   }
@@ -62,18 +62,81 @@ export class EquipmentService {
   /** #159 — nhập telemetry thủ công (DEC-55: chưa có cảm biến). Pin xuống dưới ngưỡng → cảnh báo (FR-18.02). */
   async recordTelemetry(siteId: string, id: string, body: { batteryPct?: number; speedKmh?: number; observedAt?: string }) {
     return this.tx.run(async (tx) => {
-      const e = await tx.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
-      if (!e) throw DomainError.notFound('Equipment');
-      const t = (e.telemetry as EquipmentTelemetry | null) ?? {};
-      const next: EquipmentTelemetry = { ...t, ...(body.batteryPct !== undefined ? { batteryPct: body.batteryPct } : {}), ...(body.speedKmh !== undefined ? { speedKmh: body.speedKmh } : {}) };
+      const equipment = await tx.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
+      if (!equipment) throw DomainError.notFound('Equipment');
+      const telemetry = (equipment.telemetry as EquipmentTelemetry | null) ?? {};
+      const next: EquipmentTelemetry = { ...telemetry, ...(body.batteryPct !== undefined ? { batteryPct: body.batteryPct } : {}), ...(body.speedKmh !== undefined ? { speedKmh: body.speedKmh } : {}) };
       const updated = await tx.equipment.update({
         where: { id },
         data: { telemetry: next as object, telemetryAt: body.observedAt ? new Date(body.observedAt) : new Date(), telemetrySource: 'CONFIRMED_MANUAL', version: { increment: 1 } },
       });
-      const lowBattery = next.batteryPct !== undefined && next.batteryPct < LOW_BATTERY_PCT && (t.batteryPct ?? 100) >= LOW_BATTERY_PCT;
-      await this.publish(tx, updated, e.status, { lowBattery });
+      const lowBattery = next.batteryPct !== undefined && next.batteryPct < LOW_BATTERY_PCT && (telemetry.batteryPct ?? 100) >= LOW_BATTERY_PCT;
+      await this.publish(tx, updated, equipment.status, { lowBattery });
       return updated;
     });
+  }
+
+  /** Đăng ký xe nâng mới cho site (vận hành thật) — trạng thái ban đầu OFFLINE tới khi người lái nhận xe. */
+  async create(siteId: string, body: CreateEquipmentRequest) {
+    return this.tx.run(async (tx) => {
+      if (await tx.equipment.findFirst({ where: { siteId, code: body.code, deletedAt: null } })) throw DomainError.rule(ErrorCode.CODE_ALREADY_EXISTS, `Equipment ${body.code} already exists at this site`);
+      await this.assertChargerAndOperator(tx, siteId, body.chargerLocationId ?? null, body.operatorUserId ?? null);
+      const created = await tx.equipment.create({
+        data: {
+          siteId,
+          code: body.code,
+          equipmentType: body.equipmentType,
+          model: body.model ?? null,
+          status: 'OFFLINE',
+          chargerLocationId: body.chargerLocationId ?? null,
+          currentOperatorId: body.operatorUserId ?? null,
+          telemetry: { batteryPct: 100, speedKmh: 0, movesToday: 0 },
+          telemetryAt: new Date(),
+          telemetrySource: 'CONFIRMED_MANUAL',
+        },
+      });
+      await this.audit.record(tx, { siteId, action: 'EQUIPMENT_CREATED', entityType: 'Equipment', entityId: created.id, diff: { after: { code: created.code, model: created.model } } });
+      await this.publish(tx, created, created.status, {});
+      return created;
+    });
+  }
+
+  async update(siteId: string, equipmentId: string, body: UpdateEquipmentRequest) {
+    return this.tx.run(async (tx) => {
+      const before = await tx.equipment.findFirst({ where: { id: equipmentId, siteId, deletedAt: null } });
+      if (!before) throw DomainError.notFound('Equipment');
+      await this.assertChargerAndOperator(tx, siteId, body.chargerLocationId ?? null, body.operatorUserId ?? null);
+      const updated = await tx.equipment.update({
+        where: { id: equipmentId },
+        data: {
+          ...(body.model !== undefined ? { model: body.model } : {}),
+          ...(body.chargerLocationId !== undefined ? { chargerLocationId: body.chargerLocationId } : {}),
+          ...(body.operatorUserId !== undefined ? { currentOperatorId: body.operatorUserId } : {}),
+          version: { increment: 1 },
+        },
+      });
+      await this.audit.record(tx, {
+        siteId,
+        action: 'EQUIPMENT_UPDATED',
+        entityType: 'Equipment',
+        entityId: equipmentId,
+        diff: { before: { model: before.model, operator: before.currentOperatorId, charger: before.chargerLocationId }, after: { model: updated.model, operator: updated.currentOperatorId, charger: updated.chargerLocationId } },
+      });
+      await this.publish(tx, updated, before.status, {});
+      return updated;
+    });
+  }
+
+  /** Trạm sạc phải là location CHARGER của site; người lái phải có quyền tại site (vai trò bất kỳ). */
+  private async assertChargerAndOperator(tx: Tx, siteId: string, chargerLocationId: string | null, operatorUserId: string | null) {
+    if (chargerLocationId) {
+      const charger = await tx.location.findFirst({ where: { id: chargerLocationId, siteId, deletedAt: null } });
+      if (!charger || charger.locationType !== 'CHARGER') throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Charger must be a charging bay of this site');
+    }
+    if (operatorUserId) {
+      const assignment = await tx.userSiteRole.findFirst({ where: { userId: operatorUserId, revokedAt: null, OR: [{ siteId }, { siteId: null }] } });
+      if (!assignment) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Operator has no role at this site');
+    }
   }
 
   async list(siteId: string): Promise<Equipment[]> {
@@ -81,14 +144,14 @@ export class EquipmentService {
   }
 
   async operators(ids: Array<string | null>) {
-    const clean = ids.filter((x): x is string => !!x);
+    const clean = ids.filter((id): id is string => !!id);
     return clean.length ? this.prisma.user.findMany({ where: { id: { in: clean } }, select: { id: true, fullName: true } }) : [];
   }
 
   async get(siteId: string, id: string): Promise<Equipment> {
-    const e = await this.prisma.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
-    if (!e) throw DomainError.notFound('Equipment');
-    return e;
+    const equipment = await this.prisma.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
+    if (!equipment) throw DomainError.notFound('Equipment');
+    return equipment;
   }
 
   /**
@@ -96,52 +159,52 @@ export class EquipmentService {
    * phát forklift.status_changed với snapshot để client patch cache.
    */
   async setStatus(tx: Tx, siteId: string, id: string, to: EquipmentStatus, opts: { taskSummary?: string | null; incrementMoves?: boolean; allowedFrom?: EquipmentStatus[]; reason?: string } = {}) {
-    const e = await tx.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
-    if (!e) throw DomainError.notFound('Equipment');
-    if (opts.allowedFrom && !opts.allowedFrom.includes(e.status)) {
-      throw DomainError.rule(ErrorCode.EQUIPMENT_UNAVAILABLE, `${e.code} is ${e.status}`, { status: e.status });
+    const equipment = await tx.equipment.findFirst({ where: { id, siteId, deletedAt: null } });
+    if (!equipment) throw DomainError.notFound('Equipment');
+    if (opts.allowedFrom && !opts.allowedFrom.includes(equipment.status)) {
+      throw DomainError.rule(ErrorCode.EQUIPMENT_UNAVAILABLE, `${equipment.code} is ${equipment.status}`, { status: equipment.status });
     }
-    const t = (e.telemetry as EquipmentTelemetry | null) ?? {};
+    const telemetry = (equipment.telemetry as EquipmentTelemetry | null) ?? {};
     const updated = await tx.equipment.update({
       where: { id },
       data: {
         status: to,
         version: { increment: 1 },
         ...(opts.taskSummary !== undefined ? { taskSummary: opts.taskSummary } : {}),
-        ...(opts.incrementMoves ? { telemetry: { ...t, movesToday: (t.movesToday ?? 0) + 1 } } : {}),
+        ...(opts.incrementMoves ? { telemetry: { ...telemetry, movesToday: (telemetry.movesToday ?? 0) + 1 } } : {}),
       },
     });
-    await this.publish(tx, updated, e.status, { reason: opts.reason ?? null });
+    await this.publish(tx, updated, equipment.status, { reason: opts.reason ?? null });
     return updated;
   }
 
-  private async publish(tx: Tx, e: Equipment, fromStatus: EquipmentStatus, extra: Record<string, unknown> = {}) {
+  private async publish(tx: Tx, equipment: Equipment, fromStatus: EquipmentStatus, extra: Record<string, unknown> = {}) {
     await this.outbox.publish(tx, {
-      siteId: e.siteId,
+      siteId: equipment.siteId,
       type: 'forklift.status_changed',
       aggregateType: 'Equipment',
-      aggregateId: e.id,
-      aggregateVersion: e.version,
-      data: { forklift: this.toSnapshot(e), fromStatus, ...extra },
+      aggregateId: equipment.id,
+      aggregateVersion: equipment.version,
+      data: { forklift: this.toSnapshot(equipment), fromStatus, ...extra },
     });
   }
 
   /** Vị trí forklift: không có cảm biến (DEC-55) → INFERRED tại charger (mục 18.3). */
-  toSnapshot(e: Equipment): SnapshotForklift {
-    const t = (e.telemetry as EquipmentTelemetry | null) ?? {};
+  toSnapshot(equipment: Equipment): SnapshotForklift {
+    const telemetry = (equipment.telemetry as EquipmentTelemetry | null) ?? {};
     return {
-      id: e.id,
-      code: e.code,
-      equipmentType: e.equipmentType,
-      model: e.model,
-      status: e.status,
-      taskSummary: e.taskSummary,
-      position: e.chargerLocationId
-        ? { locationId: e.chargerLocationId, source: 'INFERRED', confirmedAt: (e.telemetryAt ?? e.updatedAt).toISOString() }
+      id: equipment.id,
+      code: equipment.code,
+      equipmentType: equipment.equipmentType,
+      model: equipment.model,
+      status: equipment.status,
+      taskSummary: equipment.taskSummary,
+      position: equipment.chargerLocationId
+        ? { locationId: equipment.chargerLocationId, source: 'INFERRED', confirmedAt: (equipment.telemetryAt ?? equipment.updatedAt).toISOString() }
         : null,
-      batteryPct: t.batteryPct ?? null,
-      telemetryAt: e.telemetryAt?.toISOString() ?? null,
-      version: e.version,
+      batteryPct: telemetry.batteryPct ?? null,
+      telemetryAt: equipment.telemetryAt?.toISOString() ?? null,
+      version: equipment.version,
     };
   }
 }

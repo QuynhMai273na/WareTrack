@@ -116,15 +116,15 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnMo
     if (!this.server) return;
     const sockets = await this.server.in(`user:${userId}`).fetchSockets();
     const access = await this.access.getUserAccess(userId);
-    for (const s of sockets) {
-      const data = s.data as SocketData;
+    for (const socket of sockets) {
+      const data = socket.data as SocketData;
       if (!access || access.status !== 'ACTIVE') {
-        s.disconnect(true);
+        socket.disconnect(true);
         continue;
       }
       if (data.siteId && !(await this.access.canAccessSite(access, data.siteId))) {
-        s.leave(`site:${data.siteId}`);
-        s.emit('site:revoked', { siteId: data.siteId });
+        socket.leave(`site:${data.siteId}`);
+        socket.emit('site:revoked', { siteId: data.siteId });
         data.siteId = null;
       }
     }

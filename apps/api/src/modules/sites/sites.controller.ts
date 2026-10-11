@@ -53,8 +53,8 @@ export class SitesController {
 
   @Get(':siteId/locations')
   @RequirePermission('site.read')
-  locations(@Param('siteId') siteId: string, @Query('zoneId') zoneId?: string, @Query('type') type?: string, @Query('q') q?: string) {
-    return this.sites.listLocations(siteId, { zoneId, type, q });
+  locations(@Param('siteId') siteId: string, @Query('zoneId') zoneId?: string, @Query('type') type?: string, @Query('q') query?: string) {
+    return this.sites.listLocations(siteId, { zoneId, type, q: query });
   }
 
   /** Tra cứu location theo giá trị QR quét được (#36). Khai báo trước ":locationId". */

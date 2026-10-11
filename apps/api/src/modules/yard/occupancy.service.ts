@@ -78,8 +78,8 @@ export class OccupancyService implements OccupancyReader {
   async releaseAllFor(tx: Tx, occupantType: OccupantType, occupantId: string): Promise<string[]> {
     const active = await tx.locationOccupancy.findMany({ where: { occupantType, occupantId, releasedAt: null } });
     if (active.length === 0) return [];
-    await tx.locationOccupancy.updateMany({ where: { id: { in: active.map((a) => a.id) } }, data: { releasedAt: new Date() } });
-    return active.map((a) => a.locationId);
+    await tx.locationOccupancy.updateMany({ where: { id: { in: active.map((occupancy) => occupancy.id) } }, data: { releasedAt: new Date() } });
+    return active.map((occupancy) => occupancy.locationId);
   }
 
   async activeByOccupant(occupantType: OccupantType, occupantId: string, tx?: Tx) {
@@ -91,10 +91,10 @@ export class OccupancyService implements OccupancyReader {
       where: { siteId, releasedAt: null, ...(locationIds ? { locationId: { in: locationIds } } : {}) },
     });
     const map = new Map<string, ActiveOccupancy[]>();
-    for (const r of rows) {
-      const list = map.get(r.locationId) ?? [];
-      list.push({ id: r.id, locationId: r.locationId, kind: r.kind, occupantType: r.occupantType, occupantId: r.occupantId, unitsUsed: Number(r.unitsUsed) });
-      map.set(r.locationId, list);
+    for (const row of rows) {
+      const list = map.get(row.locationId) ?? [];
+      list.push({ id: row.id, locationId: row.locationId, kind: row.kind, occupantType: row.occupantType, occupantId: row.occupantId, unitsUsed: Number(row.unitsUsed) });
+      map.set(row.locationId, list);
     }
     return map;
   }
@@ -118,7 +118,7 @@ export class OccupancyService implements OccupancyReader {
       }
       return;
     }
-    const used = active.reduce((s, a) => s + Number(a.unitsUsed), 0);
+    const used = active.reduce((sum, occupancy) => sum + Number(occupancy.unitsUsed), 0);
     if (used + units > Number(loc.capacityUnits)) {
       throw DomainError.rule('LOCATION_CAPACITY_EXCEEDED', `Location ${loc.code} has no free capacity`, { used, capacity: Number(loc.capacityUnits) });
     }

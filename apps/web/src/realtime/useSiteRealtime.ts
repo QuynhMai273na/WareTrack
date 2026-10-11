@@ -48,20 +48,22 @@ export function getSocket(): Socket {
 export const snapshotKey = (siteId: string) => ['site', siteId, 'snapshot'] as const;
 
 /** Invalidate (debounce) các query danh sách bị ảnh hưởng — danh sách lọc khó patch chính xác (mục 17.7). */
-function invalidateRelated(qc: QueryClient, siteId: string, e: RealtimeEnvelope) {
+function invalidateRelated(qc: QueryClient, siteId: string, event: RealtimeEnvelope) {
   const keys: string[][] = [];
-  if (e.type.startsWith('truck.')) keys.push(['site', siteId, 'visits'], ['site', siteId, 'visit', e.aggregate.id], ['site', siteId, 'docks']);
-  if (e.type === 'dock.status_changed') keys.push(['site', siteId, 'docks']);
-  if (e.type.startsWith('forklift.')) keys.push(['site', siteId, 'equipment']);
-  if (e.type === 'inventory.updated' || e.type === 'pallet.moved') keys.push(['site', siteId, 'inventory']);
-  if (e.type === 'shipment.progress_updated' || e.type === 'inventory.updated') keys.push(['site', siteId, 'shipments'], ['site', siteId, 'shipment', e.aggregate.id]);
-  if (e.type === 'shipment.progress_updated') keys.push(['site', siteId, 'shipment']);
-  if (e.type.startsWith('vehicle.') || e.type === 'slot.status_changed') keys.push(['site', siteId, 'vehicles']);
-  if (e.type === 'task.status_changed' || e.type === 'forklift.task_updated') keys.push(['site', siteId, 'tasks']);
-  if (e.type === 'exception.raised') keys.push(['site', siteId, 'exceptions']);
-  if (e.type.startsWith('vehicle.')) keys.push(['site', siteId, 'vehicles'], ['vehicle-history']);
-  if (e.type === 'slot.status_changed') keys.push(['site', siteId, 'vehicles', 'slots']);
-  for (const k of keys) void qc.invalidateQueries({ queryKey: k });
+  if (event.type.startsWith('truck.')) keys.push(['site', siteId, 'visits'], ['site', siteId, 'visit', event.aggregate.id], ['site', siteId, 'docks']);
+  if (event.type === 'dock.status_changed') keys.push(['site', siteId, 'docks']);
+  if (event.type.startsWith('forklift.')) keys.push(['site', siteId, 'equipment']);
+  if (event.type === 'inventory.updated' || event.type === 'pallet.moved') keys.push(['site', siteId, 'inventory']);
+  if (event.type === 'shipment.progress_updated' || event.type === 'inventory.updated') keys.push(['site', siteId, 'shipments'], ['site', siteId, 'shipment', event.aggregate.id]);
+  if (event.type === 'shipment.progress_updated') keys.push(['site', siteId, 'shipment']);
+  if (event.type.startsWith('vehicle.') || event.type === 'slot.status_changed') keys.push(['site', siteId, 'vehicles']);
+  if (event.type === 'task.status_changed' || event.type === 'forklift.task_updated') keys.push(['site', siteId, 'tasks']);
+  if (event.type === 'exception.raised') keys.push(['site', siteId, 'exceptions']);
+  if (event.type.startsWith('vehicle.')) keys.push(['site', siteId, 'vehicles'], ['vehicle-history']);
+  if (event.type === 'slot.status_changed') keys.push(['site', siteId, 'vehicles', 'slots']);
+  // Sơ đồ vừa publish → tải lại layout + snapshot (vị trí mới/đổi) cho scene 3D và các bảng
+  if (event.type === 'layout.published') keys.push(['site', siteId, 'layout'], ['site', siteId, 'snapshot'], ['admin', 'locations', siteId]);
+  for (const affectedKey of keys) void qc.invalidateQueries({ queryKey: affectedKey });
 }
 
 /**
@@ -73,7 +75,7 @@ export function useSiteRealtime(siteId: string | undefined) {
 
   useEffect(() => {
     if (!siteId) return;
-    const s = getSocket();
+    const siteSocket = getSocket();
     const live = useLive.getState();
     const seq = new SiteSequencer(siteId);
     let syncing = true;
@@ -84,7 +86,7 @@ export function useSiteRealtime(siteId: string | undefined) {
     const apply = (events: RealtimeEnvelope[]) => {
       if (events.length === 0) return;
       qc.setQueryData<SiteSnapshot>(snapshotKey(siteId), (old) => (old ? events.reduce(applyEventToSnapshot, old) : old));
-      for (const e of events) invalidateRelated(qc, siteId, e);
+      for (const event of events) invalidateRelated(qc, siteId, event);
       useLive.getState().touch();
     };
 
@@ -97,7 +99,7 @@ export function useSiteRealtime(siteId: string | undefined) {
         seq.reset(snap.asOfSeq);
         const buffered = pending;
         pending = [];
-        for (const e of buffered) apply(seq.accept(e).ready);
+        for (const event of buffered) apply(seq.accept(event).ready);
         syncing = false;
         useLive.getState().set('live');
       } catch {
@@ -110,26 +112,26 @@ export function useSiteRealtime(siteId: string | undefined) {
       try {
         const res = await api<EventsReplayResponse>(`/sites/${siteId}/events?afterSeq=${seq.lastSeq}`);
         if (res.truncated) return resync();
-        for (const e of res.events) apply(seq.accept(e).ready);
+        for (const event of res.events) apply(seq.accept(event).ready);
         useLive.getState().set('live');
       } catch {
         await resync();
       }
     };
 
-    const onEvent = (e: RealtimeEnvelope) => {
-      if (e.siteId !== siteId) return;
+    const onEvent = (event: RealtimeEnvelope) => {
+      if (event.siteId !== siteId) return;
       if (syncing) {
-        pending.push(e);
+        pending.push(event);
         return;
       }
-      const { ready, gap } = seq.accept(e);
+      const { ready, gap } = seq.accept(event);
       apply(ready);
       if (gap) void replay();
     };
 
     const join = () => {
-      s.emit('site:join', { siteId }, (ack: SiteJoinAck) => {
+      siteSocket.emit('site:join', { siteId }, (ack: SiteJoinAck) => {
         if (!ack.ok) return useLive.getState().set('stale');
         if (staleTimer) clearTimeout(staleTimer);
         // Lần đầu: snapshot; reconnect: thử replay trước (mục 17.6 bước 4)
@@ -146,35 +148,35 @@ export function useSiteRealtime(siteId: string | undefined) {
     const onConnectError = async (err: Error & { data?: { code?: string } }) => {
       if (err.data?.code === 'UNAUTHENTICATED') {
         const token = await refreshAccessToken();
-        if (token) s.connect();
+        if (token) siteSocket.connect();
       }
     };
 
     const onSessionExpired = async () => {
       await refreshAccessToken();
-      s.connect();
+      siteSocket.connect();
     };
 
-    s.on('connect', join);
-    s.on('event', onEvent);
-    s.on('disconnect', onDisconnect);
-    s.on('connect_error', onConnectError);
-    s.on('session:expired', onSessionExpired);
-    if (s.connected) join();
+    siteSocket.on('connect', join);
+    siteSocket.on('event', onEvent);
+    siteSocket.on('disconnect', onDisconnect);
+    siteSocket.on('connect_error', onConnectError);
+    siteSocket.on('session:expired', onSessionExpired);
+    if (siteSocket.connected) join();
     else {
       live.set('connecting');
-      s.connect();
+      siteSocket.connect();
     }
 
     return () => {
       disposed = true;
       if (staleTimer) clearTimeout(staleTimer);
-      s.off('connect', join);
-      s.off('event', onEvent);
-      s.off('disconnect', onDisconnect);
-      s.off('connect_error', onConnectError);
-      s.off('session:expired', onSessionExpired);
-      s.emit('site:leave');
+      siteSocket.off('connect', join);
+      siteSocket.off('event', onEvent);
+      siteSocket.off('disconnect', onDisconnect);
+      siteSocket.off('connect_error', onConnectError);
+      siteSocket.off('session:expired', onSessionExpired);
+      siteSocket.emit('site:leave');
     };
   }, [siteId, qc]);
 }

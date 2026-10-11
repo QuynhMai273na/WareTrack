@@ -29,8 +29,8 @@ export class ShipmentsController {
   @Get(':shipmentId/tracking')
   @RequirePermission('shipment.read')
   async tracking(@Param('siteId') siteId: string, @Param('shipmentId') id: string) {
-    const d = await this.shipments.detail(siteId, id);
-    return { shipment: { code: d.code, direction: d.direction, status: d.status, destination: d.destinationText }, visit: d.visit, steps: d.steps, progress: d.progress, asOf: new Date().toISOString() };
+    const detail = await this.shipments.detail(siteId, id);
+    return { shipment: { code: detail.code, direction: detail.direction, status: detail.status, destination: detail.destinationText }, visit: detail.visit, steps: detail.steps, progress: detail.progress, asOf: new Date().toISOString() };
   }
 
   @Patch(':shipmentId')

@@ -25,16 +25,16 @@ interface BuildingStyle {
 const FACE_ROT: Record<Face, number> = { S: 0, E: Math.PI / 2, N: Math.PI, W: -Math.PI / 2 };
 
 /** Vị trí cục bộ (so với tâm nhà) của một điểm trên mặt `face` tại `offset` tính từ góc trái nhìn từ ngoài. */
-function facePos(face: Face, offset: number, W: number, D: number): [number, number] {
+function facePos(face: Face, offset: number, buildingWidth: number, buildingDepth: number): [number, number] {
   switch (face) {
     case 'S':
-      return [-W / 2 + offset, D / 2];
+      return [-buildingWidth / 2 + offset, buildingDepth / 2];
     case 'N':
-      return [W / 2 - offset, -D / 2];
+      return [buildingWidth / 2 - offset, -buildingDepth / 2];
     case 'E':
-      return [W / 2, D / 2 - offset];
+      return [buildingWidth / 2, buildingDepth / 2 - offset];
     case 'W':
-      return [-W / 2, -D / 2 + offset];
+      return [-buildingWidth / 2, -buildingDepth / 2 + offset];
   }
 }
 
@@ -44,28 +44,28 @@ function GableBay({ length, span, rise, roofColor, wallColor, ribRepeat }: { len
   const slope = Math.hypot(span / 2, rise);
   const angle = Math.atan2(rise, span / 2);
   const gable = useMemo(() => {
-    const g = new BufferGeometry();
-    g.setAttribute('position', new Float32BufferAttribute([-span / 2, 0, 0, span / 2, 0, 0, 0, rise, 0], 3));
-    g.computeVertexNormals();
-    return g;
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new Float32BufferAttribute([-span / 2, 0, 0, span / 2, 0, 0, 0, rise, 0], 3));
+    geometry.computeVertexNormals();
+    return geometry;
   }, [span, rise]);
   return (
     <group>
-      {[1, -1].map((s) => (
-        <mesh key={s} position={[0, rise / 2, (s * span) / 4]} rotation={[s * angle, 0, 0]} castShadow receiveShadow>
+      {[1, -1].map((side) => (
+        <mesh key={side} position={[0, rise / 2, (side * span) / 4]} rotation={[side * angle, 0, 0]} castShadow receiveShadow>
           <boxGeometry args={[length + 0.6, 0.25, slope + 0.5]} />
           <meshStandardMaterial color={roofColor} map={ribs} roughness={0.55} />
         </mesh>
       ))}
-      {[1, -1].map((s) => (
-        <mesh key={s} geometry={gable} position={[(s * length) / 2, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+      {[1, -1].map((side) => (
+        <mesh key={side} geometry={gable} position={[(side * length) / 2, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
           <meshStandardMaterial color={wallColor} side={DoubleSide} />
         </mesh>
       ))}
       {/* Viền navy trên đầu hồi */}
-      {[1, -1].map((s) =>
-        [1, -1].map((t) => (
-          <mesh key={`${s}${t}`} position={[(s * (length + 0.3)) / 2, rise / 2, (t * span) / 4]} rotation={[t * angle, 0, 0]}>
+      {[1, -1].map((side) =>
+        [1, -1].map((slopeSide) => (
+          <mesh key={`${side}${slopeSide}`} position={[(side * (length + 0.3)) / 2, rise / 2, (slopeSide * span) / 4]} rotation={[slopeSide * angle, 0, 0]}>
             <boxGeometry args={[0.3, 0.32, slope + 0.5]} />
             <meshStandardMaterial color={NAVY} />
           </mesh>
@@ -119,14 +119,14 @@ function WallDoor({ open, cargo, label }: { open?: boolean; cargo?: boolean; lab
 
 /** Cụm máy lạnh trên mái phẳng (video kho lạnh: hộp trắng 2–3 quạt). */
 function RoofUnit({ fans }: { fans: number }) {
-  const w = 1.6 * fans + 0.6;
+  const unitWidth = 1.6 * fans + 0.6;
   return (
     <group>
-      <RoundedBox args={[w, 0.9, 2]} radius={0.12} position={[0, 0.45, 0]} castShadow receiveShadow>
+      <RoundedBox args={[unitWidth, 0.9, 2]} radius={0.12} position={[0, 0.45, 0]} castShadow receiveShadow>
         <meshStandardMaterial color="#f1f4fa" />
       </RoundedBox>
-      {Array.from({ length: fans }).map((_, i) => (
-        <group key={i} position={[-w / 2 + 1.1 + i * 1.6, 0.92, 0]}>
+      {Array.from({ length: fans }).map((_, fanIndex) => (
+        <group key={fanIndex} position={[-unitWidth / 2 + 1.1 + fanIndex * 1.6, 0.92, 0]}>
           <mesh rotation={[-Math.PI / 2, 0, 0]}>
             <circleGeometry args={[0.62, 24]} />
             <meshStandardMaterial color="#9aa5ba" />
@@ -166,14 +166,14 @@ function Badge({ size, label }: { size: number; label: string }) {
 }
 
 /** Nhà kho theo style của layout (mục 18.1): mái hai dốc nhiều nhịp / răng cưa / mái phẳng. */
-export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
-  const props = (o.props ?? {}) as { label?: string; roofColor?: string; wallColor?: string; style?: BuildingStyle | null };
+export const Building = memo(function Building({ layoutObject }: { layoutObject: LayoutObjectDto }) {
+  const props = (layoutObject.props ?? {}) as { label?: string; roofColor?: string; wallColor?: string; style?: BuildingStyle | null };
   const style: BuildingStyle = props.style ?? { roof: 'gable', ridge: 'x', bays: 1, roofColor: props.roofColor ?? '#2f6fe4', wallColor: props.wallColor ?? '#eef2fb', badge: { u: 0.5, v: 0.5, size: 3 } };
-  const W = o.sizeX;
-  const D = o.sizeZ;
-  const H = o.sizeY;
-  const wallX = useRibbed(W / 0.9, 1);
-  const wallZ = useRibbed(D / 0.9, 1);
+  const buildingWidth = layoutObject.sizeX;
+  const buildingDepth = layoutObject.sizeZ;
+  const buildingHeight = layoutObject.sizeY;
+  const wallX = useRibbed(buildingWidth / 0.9, 1);
+  const wallZ = useRibbed(buildingDepth / 0.9, 1);
   const flat = style.roof === 'flat';
   const ridge = style.ridge ?? 'x';
   const bays = style.bays ?? 1;
@@ -182,86 +182,86 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
   const roofLight = useMemo(() => new Color(style.roofColor).lerp(new Color('#ffffff'), 0.06).getStyle(), [style.roofColor]);
 
   // Mái hai dốc: chia nhịp theo phương vuông góc với nóc
-  const spanTotal = ridge === 'x' ? D : W;
-  const length = ridge === 'x' ? W : D;
+  const spanTotal = ridge === 'x' ? buildingDepth : buildingWidth;
+  const length = ridge === 'x' ? buildingWidth : buildingDepth;
   const span = spanTotal / bays;
   const rise = Math.min(3.2, span * 0.15);
   return (
-    <group position={[o.posX, 0, o.posZ]}>
+    <group position={[layoutObject.posX, 0, layoutObject.posZ]}>
       {/* Thân nhà + 4 mặt tường vân tôn */}
-      <mesh position={[0, H / 2, 0]} castShadow receiveShadow>
-        <boxGeometry args={[W, H, D]} />
+      <mesh position={[0, buildingHeight / 2, 0]} castShadow receiveShadow>
+        <boxGeometry args={[buildingWidth, buildingHeight, buildingDepth]} />
         <meshStandardMaterial color={wall} roughness={0.7} />
       </mesh>
-      {(['S', 'N'] as const).map((f) => (
-        <mesh key={f} position={[0, H / 2, (f === 'S' ? 1 : -1) * (D / 2 + 0.005)]} rotation={[0, f === 'S' ? 0 : Math.PI, 0]} receiveShadow>
-          <planeGeometry args={[W, H]} />
+      {(['S', 'N'] as const).map((face) => (
+        <mesh key={face} position={[0, buildingHeight / 2, (face === 'S' ? 1 : -1) * (buildingDepth / 2 + 0.005)]} rotation={[0, face === 'S' ? 0 : Math.PI, 0]} receiveShadow>
+          <planeGeometry args={[buildingWidth, buildingHeight]} />
           <meshStandardMaterial color={wall} map={flat ? null : wallX} roughness={0.7} />
         </mesh>
       ))}
-      {(['E', 'W'] as const).map((f) => (
-        <mesh key={f} position={[(f === 'E' ? 1 : -1) * (W / 2 + 0.005), H / 2, 0]} rotation={[0, f === 'E' ? Math.PI / 2 : -Math.PI / 2, 0]} receiveShadow>
-          <planeGeometry args={[D, H]} />
+      {(['E', 'W'] as const).map((face) => (
+        <mesh key={face} position={[(face === 'E' ? 1 : -1) * (buildingWidth / 2 + 0.005), buildingHeight / 2, 0]} rotation={[0, face === 'E' ? Math.PI / 2 : -Math.PI / 2, 0]} receiveShadow>
+          <planeGeometry args={[buildingDepth, buildingHeight]} />
           <meshStandardMaterial color={wall} map={flat ? null : wallZ} roughness={0.7} />
         </mesh>
       ))}
       {/* Cột góc navy + chân tường */}
-      {[-W / 2, W / 2].map((x) =>
-        [-D / 2, D / 2].map((z) => (
-          <mesh key={`${x}${z}`} position={[x, H / 2, z]} castShadow>
-            <boxGeometry args={[0.45, H + 0.05, 0.45]} />
+      {[-buildingWidth / 2, buildingWidth / 2].map((x) =>
+        [-buildingDepth / 2, buildingDepth / 2].map((z) => (
+          <mesh key={`${x}${z}`} position={[x, buildingHeight / 2, z]} castShadow>
+            <boxGeometry args={[0.45, buildingHeight + 0.05, 0.45]} />
             <meshStandardMaterial color={NAVY} />
           </mesh>
         )),
       )}
       {style.band ? (
         <>
-          <mesh position={[0, H - 0.5, D / 2 + 0.03]}>
-            <boxGeometry args={[W + 0.1, 0.55, 0.06]} />
+          <mesh position={[0, buildingHeight - 0.5, buildingDepth / 2 + 0.03]}>
+            <boxGeometry args={[buildingWidth + 0.1, 0.55, 0.06]} />
             <meshStandardMaterial color={NAVY} />
           </mesh>
-          <mesh position={[W / 2 + 0.03, H - 0.5, 0]}>
-            <boxGeometry args={[0.06, 0.55, D + 0.1]} />
+          <mesh position={[buildingWidth / 2 + 0.03, buildingHeight - 0.5, 0]}>
+            <boxGeometry args={[0.06, 0.55, buildingDepth + 0.1]} />
             <meshStandardMaterial color={NAVY} />
           </mesh>
         </>
       ) : (
-        <mesh position={[0, H - 0.2, D / 2 + 0.04]}>
-          <boxGeometry args={[W + 0.3, 0.4, 0.08]} />
+        <mesh position={[0, buildingHeight - 0.2, buildingDepth / 2 + 0.04]}>
+          <boxGeometry args={[buildingWidth + 0.3, 0.4, 0.08]} />
           <meshStandardMaterial color={NAVY} />
         </mesh>
       )}
 
       {/* Mái */}
       {flat ? (
-        <group position={[0, H, 0]}>
+        <group position={[0, buildingHeight, 0]}>
           <mesh position={[0, 0.05, 0]} receiveShadow>
-            <boxGeometry args={[W, 0.1, D]} />
+            <boxGeometry args={[buildingWidth, 0.1, buildingDepth]} />
             <meshStandardMaterial color="#f7f8fc" />
           </mesh>
           {/* Lan can */}
           {[
-            [0, D / 2, W, 0.3],
-            [0, -D / 2, W, 0.3],
-          ].map(([x, z, w, d], i) => (
-            <mesh key={i} position={[x, 0.45, z]} castShadow>
-              <boxGeometry args={[w + 0.3, 0.9, d]} />
+            [0, buildingDepth / 2, buildingWidth, 0.3],
+            [0, -buildingDepth / 2, buildingWidth, 0.3],
+          ].map(([x, z, parapetLength, parapetDepth], parapetIndex) => (
+            <mesh key={parapetIndex} position={[x, 0.45, z]} castShadow>
+              <boxGeometry args={[parapetLength + 0.3, 0.9, parapetDepth]} />
               <meshStandardMaterial color="#eef1f8" />
             </mesh>
           ))}
-          {[W / 2, -W / 2].map((x) => (
+          {[buildingWidth / 2, -buildingWidth / 2].map((x) => (
             <mesh key={x} position={[x, 0.45, 0]} castShadow>
-              <boxGeometry args={[0.3, 0.9, D]} />
+              <boxGeometry args={[0.3, 0.9, buildingDepth]} />
               <meshStandardMaterial color="#eef1f8" />
             </mesh>
           ))}
-          {(style.roofUnits ?? []).map(([u, v, fans], i) => (
-            <group key={i} position={[-W / 2 + u * W, 0.1, -D / 2 + v * D]}>
+          {(style.roofUnits ?? []).map(([relativeX, relativeZ, fans], unitIndex) => (
+            <group key={unitIndex} position={[-buildingWidth / 2 + relativeX * buildingWidth, 0.1, -buildingDepth / 2 + relativeZ * buildingDepth]}>
               <RoofUnit fans={fans} />
             </group>
           ))}
           {style.badge ? (
-            <group position={[-W / 2 + style.badge.u * W, 0.12, -D / 2 + style.badge.v * D]}>
+            <group position={[-buildingWidth / 2 + style.badge.u * buildingWidth, 0.12, -buildingDepth / 2 + style.badge.v * buildingDepth]}>
               <mesh position={[0, 0.25, 0]} rotation={[0, Math.PI / 6, 0]} castShadow>
                 <cylinderGeometry args={[style.badge.size * 0.6, style.badge.size * 0.6, 0.5, 6]} />
                 <meshStandardMaterial color="#2f6fe4" />
@@ -270,15 +270,15 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
           ) : null}
         </group>
       ) : (
-        <group position={[0, H, 0]} rotation={[0, ridge === 'x' ? 0 : Math.PI / 2, 0]}>
-          {Array.from({ length: bays }).map((_, i) => (
-            <group key={i} position={[0, 0, -spanTotal / 2 + span * (i + 0.5)]}>
-              <GableBay length={length} span={span} rise={rise} roofColor={i % 2 === 0 ? style.roofColor : roofLight} wallColor={wall} ribRepeat={length / 1.1} />
+        <group position={[0, buildingHeight, 0]} rotation={[0, ridge === 'x' ? 0 : Math.PI / 2, 0]}>
+          {Array.from({ length: bays }).map((_, bayIndex) => (
+            <group key={bayIndex} position={[0, 0, -spanTotal / 2 + span * (bayIndex + 0.5)]}>
+              <GableBay length={length} span={span} rise={rise} roofColor={bayIndex % 2 === 0 ? style.roofColor : roofLight} wallColor={wall} ribRepeat={length / 1.1} />
             </group>
           ))}
           {/* Máng xối giữa các nhịp */}
-          {Array.from({ length: bays - 1 }).map((_, i) => (
-            <mesh key={i} position={[0, 0.05, -spanTotal / 2 + span * (i + 1)]}>
+          {Array.from({ length: bays - 1 }).map((_, gutterIndex) => (
+            <mesh key={gutterIndex} position={[0, 0.05, -spanTotal / 2 + span * (gutterIndex + 1)]}>
               <boxGeometry args={[length + 0.6, 0.18, 0.5]} />
               <meshStandardMaterial color="#1f3f8f" />
             </mesh>
@@ -290,8 +290,8 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
         <group
           position={
             ridge === 'x'
-              ? [-W / 2 + style.badge.u * W, H + rise * 0.5 + 0.2, D / 2 - span * 0.25]
-              : [W / 2 - span * 0.25, H + rise * 0.5 + 0.2, -D / 2 + style.badge.v * D]
+              ? [-buildingWidth / 2 + style.badge.u * buildingWidth, buildingHeight + rise * 0.5 + 0.2, buildingDepth / 2 - span * 0.25]
+              : [buildingWidth / 2 - span * 0.25, buildingHeight + rise * 0.5 + 0.2, -buildingDepth / 2 + style.badge.v * buildingDepth]
           }
           rotation={ridge === 'x' ? [Math.atan2(rise, span / 2), 0, 0] : [0, 0, -Math.atan2(rise, span / 2)]}
         >
@@ -300,11 +300,11 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
       ) : null}
 
       {/* Cửa trang trí */}
-      {(style.doors ?? []).map((d, i) => {
-        const [x, z] = facePos(d.face, d.offset, W, D);
+      {(style.doors ?? []).map((door, doorIndex) => {
+        const [x, z] = facePos(door.face, door.offset, buildingWidth, buildingDepth);
         return (
-          <group key={i} position={[x, 0, z]} rotation={[0, FACE_ROT[d.face], 0]}>
-            <WallDoor open={d.open} cargo={d.cargo} label={d.label} />
+          <group key={doorIndex} position={[x, 0, z]} rotation={[0, FACE_ROT[door.face], 0]}>
+            <WallDoor open={door.open} cargo={door.cargo} label={door.label} />
           </group>
         );
       })}
@@ -312,21 +312,21 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
       {style.office
         ? (() => {
             const of = style.office;
-            const [x, z] = facePos(of.face, of.offset + of.width / 2, W, D);
+            const [x, z] = facePos(of.face, of.offset + of.width / 2, buildingWidth, buildingDepth);
             return (
               <group position={[x, 0, z]} rotation={[0, FACE_ROT[of.face], 0]}>
                 <mesh position={[0, of.height / 2, 0.8]} castShadow>
                   <boxGeometry args={[of.width, of.height, 1.6]} />
                   <meshStandardMaterial color="#3d6fd9" metalness={0.3} roughness={0.15} />
                 </mesh>
-                {Array.from({ length: Math.floor(of.width / 1.5) + 1 }).map((_, i) => (
-                  <mesh key={i} position={[-of.width / 2 + i * 1.5, of.height / 2, 1.61]}>
+                {Array.from({ length: Math.floor(of.width / 1.5) + 1 }).map((_, mullionIndex) => (
+                  <mesh key={mullionIndex} position={[-of.width / 2 + mullionIndex * 1.5, of.height / 2, 1.61]}>
                     <boxGeometry args={[0.08, of.height, 0.02]} />
                     <meshStandardMaterial color="#c7d6f5" />
                   </mesh>
                 ))}
-                {Array.from({ length: Math.floor(of.height / 1.6) }).map((_, i) => (
-                  <mesh key={`h${i}`} position={[0, 1.6 * (i + 1), 1.61]}>
+                {Array.from({ length: Math.floor(of.height / 1.6) }).map((_, transomIndex) => (
+                  <mesh key={`h${transomIndex}`} position={[0, 1.6 * (transomIndex + 1), 1.61]}>
                     <boxGeometry args={[of.width, 0.08, 0.02]} />
                     <meshStandardMaterial color="#c7d6f5" />
                   </mesh>
@@ -340,7 +340,7 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
         ? (() => {
             const pf = style.platform;
             const len = pf.to - pf.from;
-            const [x, z] = facePos(pf.face, pf.from + len / 2, W, D);
+            const [x, z] = facePos(pf.face, pf.from + len / 2, buildingWidth, buildingDepth);
             return (
               <group position={[x, 0, z]} rotation={[0, FACE_ROT[pf.face], 0]}>
                 <mesh position={[0, 0.6, pf.depth / 2]} castShadow receiveShadow>
@@ -363,9 +363,9 @@ export const Building = memo(function Building({ o }: { o: LayoutObjectDto }) {
       {style.sign
         ? (() => {
             const sg = style.sign;
-            const [x, z] = facePos(sg.face, sg.offset, W, D);
+            const [x, z] = facePos(sg.face, sg.offset, buildingWidth, buildingDepth);
             return (
-              <group position={[x, H - 2.2, z]} rotation={[0, FACE_ROT[sg.face], 0]}>
+              <group position={[x, buildingHeight - 2.2, z]} rotation={[0, FACE_ROT[sg.face], 0]}>
                 <RoundedBox args={[7.4, 2, 0.1]} radius={0.15} position={[1.6, 0, 0.1]}>
                   <meshStandardMaterial color="#ffffff" />
                 </RoundedBox>

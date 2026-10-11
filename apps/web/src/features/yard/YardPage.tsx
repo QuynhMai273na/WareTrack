@@ -20,14 +20,14 @@ type ActionKind = 'arrive' | 'verify' | 'reject' | 'assignDock' | 'unassignDock'
 const ACTIVE = 'SCHEDULED,AT_GATE,WAITING,DOCK_ASSIGNED,AT_DOCK,HANDLING,READY_TO_LEAVE';
 
 /** Hành động hợp lệ theo trạng thái (mục 9.1) + permission (mục 10.2) — UI ẩn nút không hợp lệ, backend vẫn kiểm. */
-function availableActions(v: VisitRow, can: (p: string) => boolean): Array<{ kind: ActionKind; icon: ReactNode; variant?: 'default' | 'secondary' | 'outline' | 'danger' }> {
-  const a: Array<{ kind: ActionKind; icon: ReactNode; variant?: 'default' | 'secondary' | 'outline' | 'danger' }> = [];
-  const add = (kind: ActionKind, perm: string, icon: ReactNode, variant?: 'default' | 'secondary' | 'outline' | 'danger') => can(perm) && a.push({ kind, icon, variant });
-  switch (v.status) {
+function availableActions(visit: VisitRow, can: (permission: string) => boolean): Array<{ kind: ActionKind; icon: ReactNode; variant?: 'default' | 'secondary' | 'outline' | 'danger' }> {
+  const actions: Array<{ kind: ActionKind; icon: ReactNode; variant?: 'default' | 'secondary' | 'outline' | 'danger' }> = [];
+  const add = (kind: ActionKind, perm: string, icon: ReactNode, variant?: 'default' | 'secondary' | 'outline' | 'danger') => can(perm) && actions.push({ kind, icon, variant });
+  switch (visit.status) {
     case 'SCHEDULED':
       add('arrive', 'yard.visit.gate_in', <LogIn size={14} />);
       add('assignDock', 'yard.dock.assign', <Warehouse size={14} />, 'secondary');
-      if (v.dock) add('unassignDock', 'yard.dock.assign', <Undo2 size={14} />, 'outline');
+      if (visit.dock) add('unassignDock', 'yard.dock.assign', <Undo2 size={14} />, 'outline');
       add('cancel', 'yard.appointment.manage', <XCircle size={14} />, 'outline');
       break;
     case 'AT_GATE':
@@ -51,7 +51,7 @@ function availableActions(v: VisitRow, can: (p: string) => boolean): Array<{ kin
       add('gateOut', 'yard.visit.gate_out', <LogOut size={14} />);
       break;
   }
-  return a;
+  return actions;
 }
 
 const ENDPOINT: Record<ActionKind, string> = {
@@ -68,7 +68,7 @@ const ENDPOINT: Record<ActionKind, string> = {
 
 function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit: VisitDetail; kind: ActionKind; onClose: () => void }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const { data: docks } = useDockLocations(siteId);
   const { data: settings } = useQuery({ queryKey: ['site', siteId, 'settings'], queryFn: () => api<{ gateDocumentChecklist: Array<{ key: string; vi: string; en: string; required: boolean }> }>(`/sites/${siteId}/settings`) });
   const [reason, setReason] = useState('');
@@ -98,22 +98,22 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
       return api<VisitDetail>(`/sites/${siteId}/visits/${visit.id}/${ENDPOINT[kind]}`, { method: 'POST', body, idempotencyKey: idemKey });
     },
     onSuccess: (updated) => {
-      qc.setQueryData(['site', siteId, 'visit', visit.id], updated);
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'visits'] });
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'docks'] });
+      queryClient.setQueryData(['site', siteId, 'visit', visit.id], updated);
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'visits'] });
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'docks'] });
       onClose();
     },
   });
 
-  const compatible = (d: LocationDto) => visit.direction === 'BOTH' || d.dockDirection === 'BOTH' || d.dockDirection === visit.direction;
+  const compatible = (dock: LocationDto) => visit.direction === 'BOTH' || dock.dockDirection === 'BOTH' || dock.dockDirection === visit.direction;
   const needsReason = ['reject', 'abort', 'cancel'].includes(kind);
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={t(`yard.${kind}`)} description={`${visit.truck.code} · ${visit.code} · ${t(`status.${visit.status}`)}`}>
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={t(`yard.${kind}`)} description={`${visit.truck.code} · ${visit.code} · ${t(`status.${visit.status}`)}`}>
       <form
         className="space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault();
+        onSubmit={(event) => {
+          event.preventDefault();
           mutation.mutate();
         }}
       >
@@ -121,11 +121,11 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
           <>
             <div>
               <Label>{t('yard.plate')}</Label>
-              <Input value={plate} onChange={(e) => setPlate(e.target.value)} />
+              <Input value={plate} onChange={(event) => setPlate(event.target.value)} />
             </div>
             <div>
               <Label>{t('yard.reason')} (late / early)</Label>
-              <Input value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input value={reason} onChange={(event) => setReason(event.target.value)} />
             </div>
           </>
         ) : null}
@@ -133,11 +133,11 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
           <div>
             <Label>{t('yard.checklist')}</Label>
             <div className="space-y-1.5">
-              {settings?.gateDocumentChecklist.map((c) => (
-                <label key={c.key} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
-                  <input type="checkbox" checked={!!checks[c.key]} onChange={(e) => setChecks((s) => ({ ...s, [c.key]: e.target.checked }))} />
-                  {i18n.language === 'vi' ? c.vi : c.en}
-                  {c.required ? <span className="ml-auto text-xs text-bad">*</span> : null}
+              {settings?.gateDocumentChecklist.map((checkItem) => (
+                <label key={checkItem.key} className="flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
+                  <input type="checkbox" checked={!!checks[checkItem.key]} onChange={(event) => setChecks((previous) => ({ ...previous, [checkItem.key]: event.target.checked }))} />
+                  {i18n.language === 'vi' ? checkItem.vi : checkItem.en}
+                  {checkItem.required ? <span className="ml-auto text-xs text-bad">*</span> : null}
                 </label>
               ))}
             </div>
@@ -145,20 +145,23 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
         ) : null}
         {kind === 'assignDock' ? (
           <div className="grid grid-cols-3 gap-2">
-            {docks?.map((d) => {
-              const disabled = d.effectiveStatus !== 'AVAILABLE' || !compatible(d);
+            {docks?.map((dock) => {
+              const disabled = dock.effectiveStatus !== 'AVAILABLE' || !compatible(dock);
               return (
                 <button
-                  key={d.id}
+                  key={dock.id}
                   type="button"
-                  disabled={disabled && d.id !== visit.dock?.id}
-                  onClick={() => setDockId(d.id)}
-                  className={cn('rounded-xl border p-2.5 text-left text-sm', dockId === d.id ? 'border-brand bg-brand-soft' : 'border-line', disabled && 'cursor-not-allowed opacity-50')}
+                  disabled={disabled && dock.id !== visit.dock?.id}
+                  onClick={() => setDockId(dock.id)}
+                  className={cn('rounded-xl border p-2.5 text-left text-sm', dockId === dock.id ? 'border-brand bg-brand-soft' : 'border-line', disabled && 'cursor-not-allowed opacity-50')}
                 >
-                  <div className="font-semibold">{d.code}</div>
-                  <div className="text-xs text-muted">{t(`direction.${d.dockDirection ?? 'BOTH'}`)}</div>
-                  <Badge tone={toneFor(d.effectiveStatus)} className="mt-1">
-                    {t(`status.${d.effectiveStatus}`)}
+                  <div className="font-semibold">{dock.name ?? dock.code}</div>
+                  <div className="text-xs text-muted">
+                    {dock.name ? `${dock.code} · ` : ''}
+                    {t(`direction.${dock.dockDirection ?? 'BOTH'}`)}
+                  </div>
+                  <Badge tone={toneFor(dock.effectiveStatus)} className="mt-1">
+                    {t(`status.${dock.effectiveStatus}`)}
                   </Badge>
                 </button>
               );
@@ -176,7 +179,7 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
         {needsReason ? (
           <div>
             <Label>{t('yard.reason')}</Label>
-            <Input value={reason} onChange={(e) => setReason(e.target.value)} required minLength={3} />
+            <Input value={reason} onChange={(event) => setReason(event.target.value)} required minLength={3} />
           </div>
         ) : null}
         {mutation.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(mutation.error)}</p> : null}
@@ -195,45 +198,45 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
 
 function WalkInDialog({ siteId, onClose, onCreated }: { siteId: string; onClose: () => void; onCreated: (id: string) => void }) {
   const { t } = useTranslation();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
   const [plate, setPlate] = useState('');
   const [direction, setDirection] = useState<'INBOUND' | 'OUTBOUND'>('INBOUND');
   const [truckType, setTruckType] = useState('BOX');
   const [reason, setReason] = useState('');
   const [idemKey] = useState(() => crypto.randomUUID());
   const { data: trucks } = useQuery({ queryKey: ['trucks', plate], queryFn: () => api<{ items: Array<{ id: string; code: string; plateNumber: string }> }>(`/trucks?plate=${encodeURIComponent(plate)}`), enabled: plate.length >= 3 });
-  const existing = trucks?.items.find((x) => x.plateNumber === plate.replace(/[\s.-]/g, '').toUpperCase());
-  const m = useMutation({
+  const existing = trucks?.items.find((truck) => truck.plateNumber === plate.replace(/[\s.-]/g, '').toUpperCase());
+  const createWalkIn = useMutation({
     mutationFn: () =>
       api<VisitDetail>(`/sites/${siteId}/visits/walk-in`, {
         method: 'POST',
         idempotencyKey: idemKey,
         body: { direction, actualPlate: plate, reason, ...(existing ? { truckId: existing.id } : { newTruck: { plateNumber: plate, truckType } }) },
       }),
-    onSuccess: (v) => {
-      void qc.invalidateQueries({ queryKey: ['site', siteId, 'visits'] });
-      onCreated(v.id);
+    onSuccess: (createdVisit) => {
+      void queryClient.invalidateQueries({ queryKey: ['site', siteId, 'visits'] });
+      onCreated(createdVisit.id);
       onClose();
     },
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()} title={t('yard.walkIn')} description="UC-01 A1">
+    <Dialog open onOpenChange={(open) => !open && onClose()} title={t('yard.walkIn')} description="UC-01 A1">
       <form
         className="space-y-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          m.mutate();
+        onSubmit={(event) => {
+          event.preventDefault();
+          createWalkIn.mutate();
         }}
       >
         <div>
           <Label>{t('yard.plate')}</Label>
-          <Input value={plate} onChange={(e) => setPlate(e.target.value)} required minLength={2} />
+          <Input value={plate} onChange={(event) => setPlate(event.target.value)} required minLength={2} />
           {existing ? <p className="mt-1 text-xs text-ok">✓ {existing.code}</p> : plate.length >= 3 ? <p className="mt-1 text-xs text-muted">New truck</p> : null}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>{t('inspector.direction')}</Label>
-            <Select value={direction} onChange={(e) => setDirection(e.target.value as 'INBOUND' | 'OUTBOUND')}>
+            <Select value={direction} onChange={(event) => setDirection(event.target.value as 'INBOUND' | 'OUTBOUND')}>
               <option value="INBOUND">{t('direction.INBOUND')}</option>
               <option value="OUTBOUND">{t('direction.OUTBOUND')}</option>
             </Select>
@@ -241,9 +244,9 @@ function WalkInDialog({ siteId, onClose, onCreated }: { siteId: string; onClose:
           {!existing ? (
             <div>
               <Label>Truck type</Label>
-              <Select value={truckType} onChange={(e) => setTruckType(e.target.value)}>
-                {['BOX', 'REEFER', 'FLATBED', 'CAR_CARRIER', 'CONTAINER'].map((x) => (
-                  <option key={x}>{x}</option>
+              <Select value={truckType} onChange={(event) => setTruckType(event.target.value)}>
+                {['BOX', 'REEFER', 'FLATBED', 'CAR_CARRIER', 'CONTAINER'].map((typeOption) => (
+                  <option key={typeOption}>{typeOption}</option>
                 ))}
               </Select>
             </div>
@@ -251,14 +254,14 @@ function WalkInDialog({ siteId, onClose, onCreated }: { siteId: string; onClose:
         </div>
         <div>
           <Label>{t('yard.reason')}</Label>
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} required minLength={3} />
+          <Input value={reason} onChange={(event) => setReason(event.target.value)} required minLength={3} />
         </div>
-        {m.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(m.error)}</p> : null}
+        {createWalkIn.isError ? <p className="rounded-lg bg-bad-soft px-3 py-2 text-sm text-bad">{describeError(createWalkIn.error)}</p> : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" disabled={m.isPending}>
+          <Button type="submit" disabled={createWalkIn.isPending}>
             {t('common.confirm')}
           </Button>
         </div>
@@ -269,31 +272,31 @@ function WalkInDialog({ siteId, onClose, onCreated }: { siteId: string; onClose:
 
 function VisitPanel({ siteId, visitId, timeZone }: { siteId: string; visitId: string; timeZone: string }) {
   const { t } = useTranslation();
-  const can = useAuth((s) => s.can);
-  const { data: v } = useVisit(siteId, visitId);
+  const can = useAuth((state) => state.can);
+  const { data: visit } = useVisit(siteId, visitId);
   const [action, setAction] = useState<ActionKind | null>(null);
-  if (!v) return <div className="card p-5 text-sm text-muted">{t('common.loading')}</div>;
-  const actions = availableActions(v, (p) => can(siteId, p));
+  if (!visit) return <div className="card p-5 text-sm text-muted">{t('common.loading')}</div>;
+  const actions = availableActions(visit, (permission) => can(siteId, permission));
   return (
     <div className="card p-5">
       <div className="mb-4 flex items-start justify-between">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-brand">
-            {v.truck.carrier?.name} · {t(`direction.${v.direction}`)}
+            {visit.truck.carrier?.name} · {t(`direction.${visit.direction}`)}
           </div>
-          <div className="text-xl font-bold">{v.truck.code}</div>
+          <div className="text-xl font-bold">{visit.truck.code}</div>
           <div className="text-sm text-muted">
-            {v.truck.plateNumber} · {v.driver?.fullName ?? '—'} · {v.code}
+            {visit.truck.plateNumber} · {visit.driver?.fullName ?? '—'} · {visit.code}
           </div>
         </div>
-        <Badge tone={toneFor(v.status)}>{t(`status.${v.status}`)}</Badge>
+        <Badge tone={toneFor(visit.status)}>{t(`status.${visit.status}`)}</Badge>
       </div>
       <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
         {[
-          [t('inspector.appointment'), `${formatTime(v.appointmentStart, timeZone)} – ${formatTime(v.appointmentEnd, timeZone)}`],
-          [t('inspector.dock'), v.dock?.code ?? '—'],
-          [t('inspector.arrived'), formatTime(v.arrivedAt, timeZone)],
-          [t('tracking.docked'), formatTime(v.dockedAt, timeZone)],
+          [t('inspector.appointment'), `${formatTime(visit.appointmentStart, timeZone)} – ${formatTime(visit.appointmentEnd, timeZone)}`],
+          [t('inspector.dock'), visit.dock?.code ?? '—'],
+          [t('inspector.arrived'), formatTime(visit.arrivedAt, timeZone)],
+          [t('tracking.docked'), formatTime(visit.dockedAt, timeZone)],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl bg-slate-50 p-2.5">
             <div className="text-[11px] text-muted">{label}</div>
@@ -302,30 +305,30 @@ function VisitPanel({ siteId, visitId, timeZone }: { siteId: string; visitId: st
         ))}
       </div>
       <div className="mb-5 flex flex-wrap gap-2">
-        {actions.map((a) => (
-          <Button key={a.kind} variant={a.variant ?? 'default'} size="sm" onClick={() => setAction(a.kind)}>
-            {a.icon} {t(`yard.${a.kind}`)}
+        {actions.map((visitAction) => (
+          <Button key={visitAction.kind} variant={visitAction.variant ?? 'default'} size="sm" onClick={() => setAction(visitAction.kind)}>
+            {visitAction.icon} {t(`yard.${visitAction.kind}`)}
           </Button>
         ))}
         {actions.length === 0 ? <span className="text-sm text-muted">—</span> : null}
       </div>
       <div className="text-xs font-semibold uppercase tracking-wide text-muted">Timeline</div>
       <ol className="mt-2 space-y-2">
-        {v.timeline
+        {visit.timeline
           .slice()
           .reverse()
-          .map((e, i) => (
-            <li key={i} className="flex gap-3 text-sm">
-              <span className="tabular w-12 text-muted">{formatTime(e.at, timeZone)}</span>
+          .map((event, eventIndex) => (
+            <li key={eventIndex} className="flex gap-3 text-sm">
+              <span className="tabular w-12 text-muted">{formatTime(event.at, timeZone)}</span>
               <span className="flex-1">
-                <span className="font-medium">{e.action.replace(/_/g, ' ').toLowerCase()}</span>
-                {e.note ? <span className="text-muted"> — {e.note}</span> : null}
+                <span className="font-medium">{event.action.replace(/_/g, ' ').toLowerCase()}</span>
+                {event.note ? <span className="text-muted"> — {event.note}</span> : null}
               </span>
-              <span className="text-xs text-muted">{e.actor}</span>
+              <span className="text-xs text-muted">{event.actor}</span>
             </li>
           ))}
       </ol>
-      {action ? <ActionDialog siteId={siteId} visit={v} kind={action} onClose={() => setAction(null)} /> : null}
+      {action ? <ActionDialog siteId={siteId} visit={visit} kind={action} onClose={() => setAction(null)} /> : null}
     </div>
   );
 }
@@ -334,16 +337,16 @@ function VisitPanel({ siteId, visitId, timeZone }: { siteId: string; visitId: st
 export function YardPage() {
   const { t } = useTranslation();
   const { siteId, timeZone } = useSiteContext();
-  const can = useAuth((s) => s.can);
+  const can = useAuth((state) => state.can);
   const [params, setParams] = useSearchParams();
   const [filter, setFilter] = useState<'active' | 'all'>('active');
-  const [q, setQ] = useState('');
+  const [search, setSearch] = useState('');
   const [walkIn, setWalkIn] = useState(false);
   const { data: visits } = useVisits(siteId, filter === 'active' ? ACTIVE : undefined);
   const selected = params.get('visit');
   const rows = useMemo(
-    () => (visits ?? []).filter((v) => !q || [v.code, v.truck.code, v.truck.plateNumber, v.truck.carrier?.name ?? ''].some((s) => s.toLowerCase().includes(q.toLowerCase()))),
-    [visits, q],
+    () => (visits ?? []).filter((visit) => !search || [visit.code, visit.truck.code, visit.truck.plateNumber, visit.truck.carrier?.name ?? ''].some((field) => field.toLowerCase().includes(search.toLowerCase()))),
+    [visits, search],
   );
 
   return (
@@ -354,9 +357,9 @@ export function YardPage() {
             <h2 className="mr-auto text-lg font-bold">{t('yard.title')}</h2>
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
-              <Input className="w-56 pl-8" placeholder={t('yard.lookup')} value={q} onChange={(e) => setQ(e.target.value)} />
+              <Input className="w-56 pl-8" placeholder={t('yard.lookup')} value={search} onChange={(event) => setSearch(event.target.value)} />
             </div>
-            <Select className="w-36" value={filter} onChange={(e) => setFilter(e.target.value as 'active' | 'all')}>
+            <Select className="w-36" value={filter} onChange={(event) => setFilter(event.target.value as 'active' | 'all')}>
               <option value="active">{t('yard.filterActive')}</option>
               <option value="all">{t('yard.filterAll')}</option>
             </Select>
@@ -379,20 +382,20 @@ export function YardPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((v) => (
-                  <tr key={v.id} onClick={() => setParams({ visit: v.id })} className={cn('cursor-pointer border-b border-line/60 hover:bg-slate-50', selected === v.id && 'bg-brand-soft/60')}>
+                {rows.map((visit) => (
+                  <tr key={visit.id} onClick={() => setParams({ visit: visit.id })} className={cn('cursor-pointer border-b border-line/60 hover:bg-slate-50', selected === visit.id && 'bg-brand-soft/60')}>
                     <td className="py-2.5">
-                      <div className="font-semibold">{v.truck.code}</div>
+                      <div className="font-semibold">{visit.truck.code}</div>
                       <div className="text-xs text-muted">
-                        {v.truck.plateNumber} · {v.code}
+                        {visit.truck.plateNumber} · {visit.code}
                       </div>
                     </td>
-                    <td>{v.truck.carrier?.name ?? '—'}</td>
-                    <td>{t(`direction.${v.direction}`)}</td>
-                    <td className="tabular">{v.unscheduled ? <Badge tone="warn">walk-in</Badge> : formatTime(v.appointmentStart, timeZone)}</td>
-                    <td>{v.dock?.code ?? '—'}</td>
+                    <td>{visit.truck.carrier?.name ?? '—'}</td>
+                    <td>{t(`direction.${visit.direction}`)}</td>
+                    <td className="tabular">{visit.unscheduled ? <Badge tone="warn">walk-in</Badge> : formatTime(visit.appointmentStart, timeZone)}</td>
+                    <td>{visit.dock?.code ?? '—'}</td>
                     <td>
-                      <Badge tone={toneFor(v.status)}>{t(`status.${v.status}`)}</Badge>
+                      <Badge tone={toneFor(visit.status)}>{t(`status.${visit.status}`)}</Badge>
                     </td>
                   </tr>
                 ))}
