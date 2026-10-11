@@ -55,6 +55,24 @@ const matches = (scan: string, loc: { code: string; qrValue: string }) => scan.t
 export class TasksService implements OnModuleInit {
   private readonly handlers = new Map<TaskType, TaskHandler>();
 
+  /**
+   * Người nhận việc được tại site: user đang hoạt động có vai trò vận hành tại site (hoặc cấp doanh nghiệp).
+   * Dùng cho hộp thoại giao task của giám sát kho / điều phối — họ không có quyền xem danh sách user đầy đủ.
+   */
+  async assignees(siteId: string) {
+    const assignments = await this.prisma.userSiteRole.findMany({
+      where: { revokedAt: null, OR: [{ siteId }, { siteId: null }], role: { code: { in: ['FORKLIFT_OPERATOR', 'WAREHOUSE_OPERATOR', 'WAREHOUSE_SUPERVISOR', 'YARD_DISPATCHER', 'INVENTORY_CONTROLLER'] } }, user: { status: 'ACTIVE' } },
+      include: { user: true, role: true },
+    });
+    const byUser = new Map<string, { id: string; fullName: string; username: string; roleCodes: string[] }>();
+    for (const assignment of assignments) {
+      const entry = byUser.get(assignment.userId) ?? { id: assignment.userId, fullName: assignment.user.fullName, username: assignment.user.username, roleCodes: [] };
+      if (!entry.roleCodes.includes(assignment.role.code)) entry.roleCodes.push(assignment.role.code);
+      byUser.set(assignment.userId, entry);
+    }
+    return [...byUser.values()].sort((left, right) => left.fullName.localeCompare(right.fullName));
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly tx: TxRunner,

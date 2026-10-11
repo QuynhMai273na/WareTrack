@@ -42,6 +42,13 @@ export class OperationsController {
     return this.tasks.list(siteId, { status, type, assigneeId: assigneeId === 'me' ? user.userId : assigneeId, sourceId });
   }
 
+  /** Danh sách người có thể nhận task tại site (hộp thoại giao việc). */
+  @Get('task-assignees')
+  @RequirePermission('task.assign')
+  assignees(@Param('siteId') siteId: string) {
+    return this.tasks.assignees(siteId);
+  }
+
   @Get('tasks/:taskId')
   @RequirePermission('task.read')
   get(@Param('siteId') siteId: string, @Param('taskId') id: string) {

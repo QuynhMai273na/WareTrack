@@ -18,7 +18,7 @@ export class HealthController {
   /** Chế độ chạy cho màn hình đăng nhập: demo (hiện tài khoản mẫu) hay vận hành thật. */
   @Get('info')
   info() {
-    const demoMode = process.env.DEMO_DIRECTOR === 'true' || process.env.SEED_ON_EMPTY === 'true';
+    const demoMode = ['true', 'scene'].includes(process.env.DEMO_DIRECTOR ?? '') || process.env.SEED_ON_EMPTY === 'true';
     return { mode: demoMode ? 'demo' : 'live' };
   }
 

@@ -40,8 +40,14 @@ export class DemoDirector implements OnApplicationShutdown {
     private readonly equipment: EquipmentService,
   ) {}
 
+  /** `true` = dựng cảnh video rồi tự điều phối liên tục; `scene` = chỉ dựng cảnh, sau đó người thật thao tác. */
+  private mode() {
+    const configured = process.env.DEMO_DIRECTOR;
+    return configured === 'true' || configured === 'scene' ? configured : 'off';
+  }
+
   enabled() {
-    return process.env.DEMO_DIRECTOR === 'true';
+    return this.mode() !== 'off';
   }
 
   start(port: number) {
@@ -67,6 +73,10 @@ export class DemoDirector implements OnApplicationShutdown {
       await this.bootstrap();
     } catch (err) {
       this.logger.error(`Bootstrap failed: ${(err as Error).message}`);
+    }
+    if (this.mode() === 'scene') {
+      this.logger.log('Demo scene ready — manual mode: trucks move only when users act');
+      return;
     }
     this.timer = setInterval(() => {
       if (this.busy) return;

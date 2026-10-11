@@ -45,7 +45,7 @@ pnpm dev                                    # API :3000 + web :5173
 | | Demo | Vận hành thật |
 |---|---|---|
 | Dữ liệu | `pnpm db:seed` hoặc `SEED_ON_EMPTY=true` (5 site theo video) | DB trống — không seed |
-| Xe tự chạy | `DEMO_DIRECTOR=true` | `DEMO_DIRECTOR=false` — xe chỉ di chuyển khi có người ghi nhận (cổng, dock, xếp/dỡ) |
+| Xe tự chạy | `DEMO_DIRECTOR=true` (tự điều phối) · `DEMO_DIRECTOR=scene` (dựng cảnh video rồi để người thật thao tác bằng các tài khoản demo) | `DEMO_DIRECTOR=false` — xe chỉ di chuyển khi có người ghi nhận (cổng, dock, xếp/dỡ) |
 | Tài khoản đầu tiên | Tài khoản mẫu ở trên | `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_PASSWORD` (≥ 12 ký tự), tùy chọn `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_FULL_NAME` — tạo khi DB chưa có user |
 
 Quy trình đưa một kho thật vào hệ thống (đăng nhập bằng admin → tự vào **Administration**):

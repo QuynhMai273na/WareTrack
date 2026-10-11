@@ -24,10 +24,11 @@ function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: T
   const me = useAuth((state) => state.me);
   const can = useAuth((state) => state.can);
   const { data: equipment } = useEquipment(siteId);
-  const { data: users } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => api<{ items: Array<{ id: string; fullName: string; siteRoles: Array<{ roleCode: string; siteId: string | null }> }> }>('/users').then((response) => response.items),
-    enabled: action === 'assign' && can(undefined, 'identity.user.read'),
+  // Người nhận việc tại site — không cần quyền quản lý user (giám sát kho / điều phối giao việc được)
+  const { data: assignees } = useQuery({
+    queryKey: ['site', siteId, 'task-assignees'],
+    queryFn: () => api<Array<{ id: string; fullName: string; username: string; roleCodes: string[] }>>(`/sites/${siteId}/task-assignees`),
+    enabled: action === 'assign' && can(siteId, 'task.assign'),
   });
   const [assignee, setAssignee] = useState(me?.user.id ?? '');
   const [equipmentId, setEquipmentId] = useState('');
@@ -60,7 +61,7 @@ function TaskDialog({ siteId, task, action, onClose }: { siteId: string; task: T
       onClose();
     },
   });
-  const operators = users?.filter((user) => user.siteRoles.some((siteRole) => (siteRole.siteId === siteId || siteRole.siteId === null) && ['FORKLIFT_OPERATOR', 'WAREHOUSE_OPERATOR', 'WAREHOUSE_SUPERVISOR', 'YARD_DISPATCHER'].includes(siteRole.roleCode)));
+  const operators = assignees;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()} title={`${t(`tasks.actions.${action}`)} · ${task.code}`} description={`${t(`tasks.type.${task.taskType}`)} · ${task.subject.code}${task.subject.label ? ` · ${task.subject.label}` : ''}`}>
       <form className="space-y-3" onSubmit={(event) => (event.preventDefault(), actionMutation.mutate())}>
