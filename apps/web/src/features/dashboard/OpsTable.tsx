@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn, minutesFromNow } from '@/lib/utils';
+import { locationLabels } from '@/scene/labels';
 import { useScene } from '@/stores/scene';
 
 const short = (carrier: string | null | undefined) => (carrier ?? '').split(' ')[0];
@@ -86,7 +87,7 @@ export function OpsTable({ snapshot, expanded = false }: { snapshot: SiteSnapsho
               return (
                 <button key={d.locationId} className={row(selection?.id === d.locationId)} onClick={() => select({ siteId, type: truck ? 'truck' : 'dock', id: truck?.visitId ?? d.locationId })}>
                   <div className="w-14 leading-tight">
-                    <div className="font-semibold">{d.code}</div>
+                    <div className="font-semibold">{locationLabels.get(d.locationId)?.label ?? d.code}</div>
                     <div className="text-[11px] text-muted">{site.code}</div>
                   </div>
                   <div className="flex-1 truncate">
@@ -166,7 +167,7 @@ export function OpsTable({ snapshot, expanded = false }: { snapshot: SiteSnapsho
                   </div>
                   <div className="flex-1 truncate">
                     <span className={cn('mr-1.5 inline-block h-2 w-2 rounded-full', DOT[short(tr.carrier)] ?? 'bg-brand')} />
-                    {atDock ? `${site.code} · ${dock?.code ?? ''}` : `${t('v.truck.to')} ${site.code}`}
+                    {atDock ? `${site.code} · ${(dock ? locationLabels.get(dock.locationId)?.label : undefined) ?? dock?.code ?? ''}` : `${t('v.truck.to')} ${site.code}`}
                   </div>
                   <Badge tone={state.tone} className="w-[78px] justify-center">
                     {state.label}

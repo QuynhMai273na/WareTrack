@@ -112,6 +112,17 @@ export class DemoDirector implements OnApplicationShutdown {
     await this.prisma.codeCounter.upsert({ where: { scope: 'SHP' }, update: { value: next - 1 }, create: { scope: 'SHP', value: next - 1 } });
   }
 
+  /**
+   * Mã lô hàng theo video được đặt không theo thứ tự (78442…78472) → sau khi dựng cảnh, bộ đếm phải vượt số lớn nhất,
+   * nếu không lô hàng mới sẽ trùng mã (CODE_ALREADY_EXISTS) và mọi xe kẹt ở dock.
+   */
+  private async syncShipmentCounter() {
+    const scripted = DEMO_SCENES.flatMap((sc) => [...sc.outbound, ...sc.inbound].map((x) => x.shipment));
+    const top = Math.max(0, ...scripted);
+    const current = await this.prisma.codeCounter.findUnique({ where: { scope: 'SHP' } });
+    if (!current || current.value < top) await this.setShipmentCode(top + 1);
+  }
+
   private async partnerId(name: string) {
     return (await this.prisma.partner.findFirst({ where: { name } }))?.id;
   }
@@ -198,6 +209,7 @@ export class DemoDirector implements OnApplicationShutdown {
     if (!wh1) return;
     const marker = await this.prisma.siteSetting.findUnique({ where: { siteId_key: { siteId: wh1, key: 'demo.bootstrapped' } } });
     if (marker) {
+      await this.syncShipmentCounter();
       this.logger.log('Scene already bootstrapped — continuing simulation');
       return;
     }
@@ -218,6 +230,7 @@ export class DemoDirector implements OnApplicationShutdown {
         if (v && eq) this.forkliftOf.set(v.id, eq.id);
       }
     }
+    await this.syncShipmentCounter();
     await this.prisma.siteSetting.create({ data: { siteId: wh1, key: 'demo.bootstrapped', value: true } });
     this.logger.log('Video scene ready');
   }

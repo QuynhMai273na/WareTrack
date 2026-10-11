@@ -43,6 +43,11 @@ export class AccessService {
     this.siteIds = null;
   }
 
+  /** Ma trận role → permission vừa đổi (đồng bộ khi khởi động) → nạp lại ở lần kiểm tra quyền kế tiếp. */
+  invalidateRolePermissions() {
+    this.rolePerms = null;
+  }
+
   async getUserAccess(userId: string): Promise<UserAccess | null> {
     const cached = this.users.get(userId);
     if (cached && Date.now() - cached.loadedAt < USER_TTL_MS) return cached;

@@ -1,12 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { LoginRequest } from '@waretrack/shared-schemas';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Navigate } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
-import { describeError } from '@/lib/api';
+import { api, describeError } from '@/lib/api';
 import { useAuth } from '@/stores/auth';
 
 const DEMO_USERS = ['manager', 'dispatcher', 'gate', 'supervisor', 'operator', 'forklift', 'inventory', 'viewer', 'admin'];
@@ -17,7 +18,10 @@ export function LoginPage() {
   const me = useAuth((s) => s.me);
   const login = useAuth((s) => s.login);
   const [error, setError] = useState<string | null>(null);
-  const form = useForm<LoginRequest>({ resolver: zodResolver(LoginRequest), defaultValues: { username: 'manager', password: '' } });
+  // Tài khoản mẫu chỉ hiện ở bản demo; vận hành thật không gợi ý username
+  const { data: runInfo } = useQuery({ queryKey: ['health', 'info'], queryFn: () => api<{ mode: 'demo' | 'live' }>('/health/info'), staleTime: Infinity });
+  const demoMode = runInfo?.mode === 'demo';
+  const form = useForm<LoginRequest>({ resolver: zodResolver(LoginRequest), defaultValues: { username: '', password: '' } });
 
   if (status === 'authenticated' && me) return <Navigate to="/" replace />;
 
@@ -58,24 +62,26 @@ export function LoginPage() {
             {t('login.submit')}
           </Button>
         </form>
+        {demoMode ? (
         <div className="mt-6 border-t border-line pt-4">
           <p className="mb-2 text-xs text-muted">{t('login.demo')}</p>
           <div className="flex flex-wrap gap-1.5">
-            {DEMO_USERS.map((u) => (
+            {DEMO_USERS.map((demoUsername) => (
               <button
-                key={u}
+                key={demoUsername}
                 type="button"
                 className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-brand-soft hover:text-brand"
                 onClick={() => {
-                  form.setValue('username', u);
+                  form.setValue('username', demoUsername);
                   form.setValue('password', 'WareTrack@2026');
                 }}
               >
-                {u}
+                {demoUsername}
               </button>
             ))}
           </div>
         </div>
+        ) : null}
       </div>
     </div>
   );

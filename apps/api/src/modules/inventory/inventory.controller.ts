@@ -8,6 +8,7 @@ import {
   MovePalletRequest,
   RecordCountRequest,
   StatusChangeRequest,
+  OpeningStockRequest,
 } from '@waretrack/shared-schemas';
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
@@ -20,10 +21,11 @@ import { InventoryQueryService } from './inventory-query.service';
 import { PalletsService } from './pallets.service';
 import { StockCountService } from './stock-count.service';
 import { StockService } from './stock.service';
+import { OpeningStockService } from './opening-stock.service';
 
 class CreateSkuDto extends createZodDto(CreateSkuRequest) {}
 class UpdateSkuDto extends createZodDto(
-  z.object({ name: z.string().min(2).max(200).optional(), lowStockThreshold: z.string().nullable().optional(), qcRequired: z.boolean().optional(), expectedVersion: z.number().int() }).strict(),
+  z.object({ name: z.string().min(2).max(200).optional(), category: z.string().max(40).nullable().optional(), lowStockThreshold: z.string().nullable().optional(), qcRequired: z.boolean().optional(), expectedVersion: z.number().int() }).strict(),
 ) {}
 class StatusChangeDto extends createZodDto(StatusChangeRequest) {}
 class CreateAdjustmentDto extends createZodDto(CreateAdjustmentRequest) {}
@@ -33,6 +35,7 @@ class MovePalletDto extends createZodDto(MovePalletRequest) {}
 class CreateCountDto extends createZodDto(CreateStockCountRequest) {}
 class RecordCountDto extends createZodDto(RecordCountRequest) {}
 class CompleteCountDto extends createZodDto(z.object({ createAdjustments: z.boolean().default(true) }).strict()) {}
+class OpeningStockDto extends createZodDto(OpeningStockRequest) {}
 class CancelDto extends createZodDto(z.object({ reason: z.string().min(3).max(300) }).strict()) {}
 
 /** SKU master (#90–93) — cấp doanh nghiệp. */
@@ -79,7 +82,7 @@ export class SkusController {
     return this.tx.run(async (tx) => {
       const res = await tx.sku.updateMany({
         where: { id, version: body.expectedVersion, deletedAt: null },
-        data: { ...(body.name ? { name: body.name } : {}), ...(body.lowStockThreshold !== undefined ? { lowStockThreshold: body.lowStockThreshold } : {}), ...(body.qcRequired !== undefined ? { qcRequired: body.qcRequired } : {}), version: { increment: 1 } },
+        data: { ...(body.name ? { name: body.name } : {}), ...(body.category !== undefined ? { category: body.category } : {}), ...(body.lowStockThreshold !== undefined ? { lowStockThreshold: body.lowStockThreshold } : {}), ...(body.qcRequired !== undefined ? { qcRequired: body.qcRequired } : {}), version: { increment: 1 } },
       });
       if (res.count === 0) throw DomainError.concurrent();
       await this.audit.record(tx, { siteId: null, action: 'SKU_UPDATED', entityType: 'Sku', entityId: id, diff: { after: body as unknown as Record<string, unknown> } });
@@ -97,7 +100,16 @@ export class InventoryController {
     private readonly stock: StockService,
     private readonly pallets: PalletsService,
     private readonly counts: StockCountService,
+    private readonly openingStock: OpeningStockService,
   ) {}
+
+  /** Nhập tồn kho đầu kỳ (vận hành thật): dryRun = chỉ kiểm tra, không ghi. */
+  @Post('inventory/opening-stock')
+  @RequirePermission('inventory.opening.import')
+  @HttpCode(200)
+  importOpeningStock(@Param('siteId') siteId: string, @Body() body: OpeningStockDto) {
+    return this.openingStock.import(siteId, body);
+  }
 
   @Get('inventory/balances')
   @RequirePermission('inventory.read')

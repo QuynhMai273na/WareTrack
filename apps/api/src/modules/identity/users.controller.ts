@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { ErrorCode, Role, ROLE_LABELS } from '@waretrack/shared-schemas';
+import { ErrorCode, ResetPasswordRequest, Role, ROLE_LABELS, UpdateUserRequest } from '@waretrack/shared-schemas';
 import * as argon2 from 'argon2';
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
@@ -27,6 +27,8 @@ class GrantRoleDto extends createZodDto(
 ) {}
 
 class ReasonDto extends createZodDto(z.object({ reason: z.string().min(3).max(300) }).strict()) {}
+class UpdateUserDto extends createZodDto(UpdateUserRequest) {}
+class ResetPasswordDto extends createZodDto(ResetPasswordRequest) {}
 
 /** Quản lý user và gán role theo site (UC-22). */
 @ApiTags('Users & Roles')
@@ -72,6 +74,56 @@ export class UsersController {
       await this.audit.record(tx, { siteId: null, action: 'USER_CREATED', entityType: 'User', entityId: user.id, diff: { after: { username: user.username, email: user.email } } });
       return { id: user.id, username: user.username, email: user.email, fullName: user.fullName, status: user.status };
     });
+  }
+
+  @Patch('users/:userId')
+  @RequirePermission('identity.user.manage')
+  async update(@Param('userId') userId: string, @Body() body: UpdateUserDto) {
+    const result = await this.tx.run(async (tx) => {
+      const before = await tx.user.findUnique({ where: { id: userId }, include: { siteRoles: { where: { revokedAt: null }, include: { role: true } } } });
+      if (!before) throw DomainError.notFound('User');
+      const disablingAdmin = body.status === 'DISABLED' && before.siteRoles.some((assignment) => assignment.role.code === Role.ADMIN);
+      if (disablingAdmin) {
+        const activeAdmins = await tx.userSiteRole.count({ where: { revokedAt: null, role: { code: Role.ADMIN }, user: { status: 'ACTIVE' } } });
+        if (activeAdmins <= 1) throw DomainError.rule(ErrorCode.LAST_ADMIN_PROTECTED, 'Cannot disable the last active admin');
+      }
+      const after = await tx.user.update({
+        where: { id: userId },
+        data: {
+          ...(body.fullName ? { fullName: body.fullName } : {}),
+          ...(body.email ? { email: body.email.toLowerCase() } : {}),
+          ...(body.status ? { status: body.status, permissionVersion: { increment: 1 } } : {}),
+          version: { increment: 1 },
+        },
+      });
+      // Khóa tài khoản → thu hồi mọi phiên đang mở
+      if (body.status === 'DISABLED') await tx.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+      await this.audit.record(tx, {
+        siteId: null,
+        action: 'USER_UPDATED',
+        entityType: 'User',
+        entityId: userId,
+        diff: { before: { fullName: before.fullName, email: before.email, status: before.status }, after: { fullName: after.fullName, email: after.email, status: after.status } },
+      });
+      return { id: after.id, username: after.username, email: after.email, fullName: after.fullName, status: after.status };
+    });
+    this.access.invalidateUser(userId);
+    return result;
+  }
+
+  @Post('users/:userId/reset-password')
+  @RequirePermission('identity.user.manage')
+  @HttpCode(204)
+  async resetPassword(@Param('userId') userId: string, @Body() body: ResetPasswordDto) {
+    const passwordHash = await argon2.hash(body.tempPassword, ARGON2_OPTIONS);
+    await this.tx.run(async (tx) => {
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      if (!user) throw DomainError.notFound('User');
+      await tx.user.update({ where: { id: userId }, data: { passwordHash, failedLoginCount: 0, lockedUntil: null, status: user.status === 'LOCKED' ? 'ACTIVE' : user.status } });
+      await tx.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+      await this.audit.record(tx, { siteId: null, action: 'USER_PASSWORD_RESET', entityType: 'User', entityId: userId });
+    });
+    this.access.invalidateUser(userId);
   }
 
   @Post('users/:userId/site-roles')

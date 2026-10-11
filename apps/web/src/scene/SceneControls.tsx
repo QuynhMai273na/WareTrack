@@ -9,7 +9,20 @@ import { getObject, objectKey } from './registry';
 const POLAR = 0.95; // ~55° từ phương thẳng đứng — góc isometric (mục 18.2)
 
 /** Camera isometric: kéo trái = pan, kéo phải = xoay, cuộn = zoom; nút: zoom ±, xoay 90°, reset, home. */
-export function CameraRig({ layout, offset, network }: { layout: LayoutIndex; offset: { x: number; z: number }; network: Array<{ layout: LayoutIndex; offset: { x: number; z: number } }> }) {
+/** operations = tỉ lệ cố định theo video (khu vận hành); whole = vừa khít toàn bộ site (xem trước sơ đồ). */
+export type CameraFraming = 'operations' | 'whole';
+
+export function CameraRig({
+  layout,
+  offset,
+  network,
+  framing = 'operations',
+}: {
+  layout: LayoutIndex;
+  offset: { x: number; z: number };
+  network: Array<{ layout: LayoutIndex; offset: { x: number; z: number } }>;
+  framing?: CameraFraming;
+}) {
   const initialized = useRef(false);
   const ref = useRef<CameraControlsImpl>(null);
   const command = useScene((s) => s.cameraCommand);
@@ -23,7 +36,36 @@ export function CameraRig({ layout, offset, network }: { layout: LayoutIndex; of
    * Khung nhìn ban đầu: tập trung vào khu vận hành (nhà kho + dock + bãi chờ), không phải toàn bộ khu đất.
    * Với camera isometric 45°, bề ngang chiếu của hình chữ nhật w×d ≈ (w + d)·cos45°.
    */
+  /** Vừa khít mọi nhà kho + vị trí của site (bản xem trước sơ đồ). */
+  const fitWholeSite = (animate: boolean) => {
+    const controls = ref.current;
+    if (!controls) return;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    const include = (x: number, z: number) => {
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    };
+    for (const building of layout.buildings) {
+      include(building.posX - building.sizeX / 2, building.posZ - building.sizeZ / 2);
+      include(building.posX + building.sizeX / 2, building.posZ + building.sizeZ / 2);
+    }
+    for (const location of layout.locations) include(location.x, location.z);
+    if (!Number.isFinite(minX)) return;
+    const centerX = (minX + maxX) / 2 + offset.x;
+    const centerZ = (minZ + maxZ) / 2 + offset.z;
+    const projectedWidth = (maxX - minX + (maxZ - minZ)) * Math.SQRT1_2 + 30;
+    const zoom = Math.max(2, Math.min(24, (size.width * 0.9) / projectedWidth));
+    void controls.setLookAt(centerX + 80, 95, centerZ + 80, centerX, 0, centerZ, animate);
+    void controls.zoomTo(zoom, animate);
+  };
+
   const fitHome = (animate: boolean) => {
+    if (framing === 'whole') return fitWholeSite(animate);
     const c = ref.current;
     if (!c) return;
     // Tâm khu vận hành: tâm các tòa nhà (theo diện tích) lệch về phía dock — như khung hình video

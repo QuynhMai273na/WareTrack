@@ -6,7 +6,7 @@ import { type DirectionalLight, NeutralToneMapping } from 'three';
 import { useScene } from '@/stores/scene';
 import { DynamicLayers } from './DynamicLayers';
 import { indexLayout, type LayoutIndex } from './layoutIndex';
-import { CameraRig, SelectionBracket } from './SceneControls';
+import { type CameraFraming, CameraRig, SelectionBracket } from './SceneControls';
 import { StaticLayout } from './StaticLayout';
 
 export interface NetworkSite {
@@ -93,7 +93,19 @@ function SiteTags({ sites, indexes, currentSiteId, onPick }: { sites: NetworkSit
  * đổi site thì camera bay tới (video: "Network overview — zoom out to all sites").
  * frameloop="demand": chỉ render khi có thay đổi/animation (mục 18.11).
  */
-export function SiteScene({ sites, currentSiteId, onPickSite, onLowFps }: { sites: NetworkSite[]; currentSiteId: string; onPickSite?: (code: string) => void; onLowFps?: () => void }) {
+export function SiteScene({
+  sites,
+  currentSiteId,
+  onPickSite,
+  onLowFps,
+  framing = 'operations',
+}: {
+  sites: NetworkSite[];
+  currentSiteId: string;
+  onPickSite?: (code: string) => void;
+  onLowFps?: () => void;
+  framing?: CameraFraming;
+}) {
   const select = useScene((s) => s.select);
   const [dpr, setDpr] = useState(1.5);
   const layoutsKey = sites.map((s) => `${s.siteId}:${s.layout.versionId}`).join('|');
@@ -136,9 +148,9 @@ export function SiteScene({ sites, currentSiteId, onPickSite, onLowFps }: { site
           return index ? <SiteOnMap key={s.siteId} site={s} index={index} /> : null;
         })}
         <SelectionBracket />
-        <SiteTags sites={sites} indexes={indexes} currentSiteId={currentSiteId} onPick={onPickSite} />
+        {sites.length > 1 ? <SiteTags sites={sites} indexes={indexes} currentSiteId={currentSiteId} onPick={onPickSite} /> : null}
       </Suspense>
-      <CameraRig layout={currentIndex} offset={current.offset} network={network} />
+      <CameraRig layout={currentIndex} offset={current.offset} network={network} framing={framing} />
     </Canvas>
   );
 }

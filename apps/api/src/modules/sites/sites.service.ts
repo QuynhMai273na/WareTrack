@@ -32,6 +32,7 @@ export function toLocationDto(loc: LocationWithRefs, occ: ActiveOccupancy[]): Lo
     zoneId: loc.zoneId,
     zoneCode: loc.zone.code,
     code: loc.code,
+    name: loc.name,
     qrValue: loc.qrValue,
     locationType: loc.locationType,
     capacityUnits: Number(loc.capacityUnits),

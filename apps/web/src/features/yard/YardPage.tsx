@@ -155,8 +155,11 @@ function ActionDialog({ siteId, visit, kind, onClose }: { siteId: string; visit:
                   onClick={() => setDockId(d.id)}
                   className={cn('rounded-xl border p-2.5 text-left text-sm', dockId === d.id ? 'border-brand bg-brand-soft' : 'border-line', disabled && 'cursor-not-allowed opacity-50')}
                 >
-                  <div className="font-semibold">{d.code}</div>
-                  <div className="text-xs text-muted">{t(`direction.${d.dockDirection ?? 'BOTH'}`)}</div>
+                  <div className="font-semibold">{d.name ?? d.code}</div>
+                  <div className="text-xs text-muted">
+                    {d.name ? `${d.code} · ` : ''}
+                    {t(`direction.${d.dockDirection ?? 'BOTH'}`)}
+                  </div>
                   <Badge tone={toneFor(d.effectiveStatus)} className="mt-1">
                     {t(`status.${d.effectiveStatus}`)}
                   </Badge>

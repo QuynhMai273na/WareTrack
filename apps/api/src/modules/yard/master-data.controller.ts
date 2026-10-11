@@ -1,11 +1,13 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { TruckType } from '@waretrack/shared-schemas';
+import type { Partner } from '@prisma/client';
+import { CreatePartnerRequest, ErrorCode, type PartnerDto, TruckType, UpdatePartnerRequest } from '@waretrack/shared-schemas';
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { AuditService } from '../../platform/audit/audit.service';
 import { RequirePermission } from '../../platform/auth/decorators';
 import { CodeGenerator } from '../../platform/codes/code-generator';
+import { DomainError } from '../../platform/errors/domain-error';
 import { PrismaService, TxRunner } from '../../platform/prisma/prisma.service';
 
 class CreateTruckDto extends createZodDto(
@@ -16,6 +18,14 @@ class CreateDriverDto extends createZodDto(
     .object({ fullName: z.string().min(2).max(120), licenseNumber: z.string().max(40).optional(), phone: z.string().max(30).optional(), carrierId: z.string().uuid().optional() })
     .strict(),
 ) {}
+
+class CreatePartnerDto extends createZodDto(CreatePartnerRequest) {}
+class UpdatePartnerDto extends createZodDto(UpdatePartnerRequest) {}
+
+function toPartnerDto(partner: Partner): PartnerDto {
+  const contact = (partner.contact ?? {}) as { email?: string | null; phone?: string | null };
+  return { id: partner.id, code: partner.code, name: partner.name, partnerTypes: partner.partnerTypes, contactEmail: contact.email ?? null, contactPhone: contact.phone ?? null };
+}
 
 /**
  * Master data cấp doanh nghiệp: partner, truck, driver (mục 16.4.8).
@@ -42,7 +52,50 @@ export class MasterDataController {
       orderBy: { name: 'asc' },
       take: 200,
     });
-    return { items: rows.map((p) => ({ id: p.id, code: p.code, name: p.name, partnerTypes: p.partnerTypes })), nextCursor: null };
+    return { items: rows.map(toPartnerDto), nextCursor: null };
+  }
+
+  @Post('partners')
+  @RequirePermission('master.partner.manage')
+  createPartner(@Body() body: CreatePartnerDto) {
+    return this.tx.run(async (tx) => {
+      if (await tx.partner.findFirst({ where: { code: body.code, deletedAt: null } })) throw DomainError.rule(ErrorCode.CODE_ALREADY_EXISTS, `Partner ${body.code} already exists`);
+      const partner = await tx.partner.create({
+        data: { code: body.code, name: body.name, partnerTypes: body.partnerTypes, contact: { email: body.contactEmail ?? null, phone: body.contactPhone ?? null } },
+      });
+      await this.audit.record(tx, { siteId: null, action: 'PARTNER_CREATED', entityType: 'Partner', entityId: partner.id, diff: { after: { code: partner.code, name: partner.name } } });
+      return toPartnerDto(partner);
+    });
+  }
+
+  @Patch('partners/:partnerId')
+  @RequirePermission('master.partner.manage')
+  updatePartner(@Param('partnerId') partnerId: string, @Body() body: UpdatePartnerDto) {
+    return this.tx.run(async (tx) => {
+      const before = await tx.partner.findFirst({ where: { id: partnerId, deletedAt: null } });
+      if (!before) throw DomainError.notFound('Partner');
+      const previousContact = (before.contact ?? {}) as { email?: string | null; phone?: string | null };
+      const partner = await tx.partner.update({
+        where: { id: partnerId },
+        data: {
+          ...(body.name ? { name: body.name } : {}),
+          ...(body.partnerTypes ? { partnerTypes: body.partnerTypes } : {}),
+          contact: {
+            email: body.contactEmail !== undefined ? body.contactEmail : (previousContact.email ?? null),
+            phone: body.contactPhone !== undefined ? body.contactPhone : (previousContact.phone ?? null),
+          },
+          version: { increment: 1 },
+        },
+      });
+      await this.audit.record(tx, {
+        siteId: null,
+        action: 'PARTNER_UPDATED',
+        entityType: 'Partner',
+        entityId: partner.id,
+        diff: { before: { name: before.name, types: before.partnerTypes }, after: { name: partner.name, types: partner.partnerTypes } },
+      });
+      return toPartnerDto(partner);
+    });
   }
 
   @Get('trucks')

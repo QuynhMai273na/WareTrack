@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Languages, LogOut, Search } from 'lucide-rea
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { NavLink, useNavigate } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import { setLanguage } from '@/i18n';
 import { api } from '@/lib/api';
 import { useSites } from '@/lib/queries';
@@ -12,9 +12,10 @@ import { cn } from '@/lib/utils';
 import { useLive } from '@/realtime/useSiteRealtime';
 import { useAuth } from '@/stores/auth';
 import { useScene } from '@/stores/scene';
+import { useCanAdminister } from '../admin/admin-access';
 import { NotificationBell } from './NotificationBell';
 
-function Logo() {
+export function Logo() {
   return (
     <div className="flex items-center gap-2">
       <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden>
@@ -139,7 +140,7 @@ function SiteSwitcher({ siteCode }: { siteCode: string }) {
         </Dropdown.Trigger>
       </div>
       <Dropdown.Portal>
-        <Dropdown.Content align="end" sideOffset={8} className="card z-50 w-[316px] p-1.5">
+        <Dropdown.Content align="end" sideOffset={8} className="card z-50 w-[340px] p-1.5">
           <Dropdown.Item
             onSelect={() => {
               navigate(`/sites/${siteCode}`);
@@ -147,7 +148,7 @@ function SiteSwitcher({ siteCode }: { siteCode: string }) {
             }}
             className="mb-1 flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 outline-none data-[highlighted]:bg-slate-50"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-700 text-[11px] font-bold text-white">ALL</span>
+            <span className="flex h-10 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-700 text-[11px] font-bold text-white">ALL</span>
             <span className="leading-tight">
               <span className="block text-sm font-semibold">{t('v.network.title')}</span>
               <span className="block text-xs text-muted">{t('v.network.sub', { n: sites?.length ?? 0 })}</span>
@@ -155,17 +156,17 @@ function SiteSwitcher({ siteCode }: { siteCode: string }) {
           </Dropdown.Item>
           {sites?.map((s) => (
             <Dropdown.Item key={s.id} onSelect={() => navigate(`/sites/${s.code}`)} className={cn('flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 outline-none data-[highlighted]:bg-slate-50', s.code === siteCode && 'bg-brand-soft/50')}>
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand text-[11px] font-bold text-white">{s.code}</span>
+              <span className="flex h-10 w-12 shrink-0 items-center justify-center whitespace-nowrap rounded-lg bg-brand text-[11px] font-bold text-white">{s.code}</span>
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="flex items-center justify-between text-sm font-semibold">
-                  <span className="truncate">{s.name}</span>
-                  <span className="tabular text-xs">{fillPct(s) ?? 0}%</span>
+                <span className="flex items-baseline justify-between gap-3">
+                  <span className="truncate text-sm font-semibold">{s.name}</span>
+                  <span className="tabular shrink-0 text-xs font-semibold">{fillPct(s) ?? 0}%</span>
                 </span>
-                <span className="mt-1 flex items-center gap-2">
-                  <span className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
+                <span className="mt-1.5 flex items-center gap-3">
+                  <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
                     <span className="block h-full rounded-full bg-brand" style={{ width: `${fillPct(s) ?? 0}%` }} />
                   </span>
-                  <span className="truncate text-[11px] text-muted">
+                  <span className="tabular w-[120px] shrink-0 whitespace-nowrap text-right text-[11px] text-muted">
                     {t('v.network.docked', { a: s.fill?.docksOccupied ?? 0, b: s.fill?.docksTotal ?? 0 })} · {t('v.network.inbound', { n: s.fill?.inbound ?? 0 })}
                   </span>
                 </span>
@@ -199,6 +200,7 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
   const roles = me?.sites.find((s) => s.code === siteCode)?.roles ?? me?.enterpriseRoles ?? [];
   const { data: sites } = useSites();
   const isVehicleYard = sites?.find((s) => s.code === siteCode)?.siteType === 'VEHICLE_YARD';
+  const canAdminister = useCanAdminister();
   const nav = [
     { to: `/sites/${siteCode}`, label: t('nav.overview'), end: true, show: true },
     { to: `/sites/${siteCode}/yard`, label: t('nav.yard'), show: can(siteId, 'yard.visit.read') },
@@ -208,8 +210,14 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
     { to: `/sites/${siteCode}/vehicles`, label: t('nav.vehicles'), show: isVehicleYard && can(siteId, 'vehicle.read') },
     { to: `/sites/${siteCode}/tasks`, label: t('nav.tasks'), show: can(siteId, 'task.read') },
     { to: `/sites/${siteCode}/exceptions`, label: t('nav.exceptions'), show: can(siteId, 'exception.read') },
+    { to: `/sites/${siteCode}/labels`, label: t('nav.labels'), show: can(siteId, 'site.read') && (can(siteId, 'location.manage') || can(siteId, 'inventory.move') || can(siteId, 'inbound.receive')) },
+    { to: `/sites/${siteCode}/inventory/import`, label: t('nav.openingStock'), show: can(siteId, 'inventory.opening.import') },
+    { to: '/admin', label: t('nav.administration'), show: canAdminister },
   ];
   const role = roles[0];
+  // Tự tính trạng thái active: Dropdown.Item asChild (Radix Slot) chỉ nối className dạng chuỗi, không nhận className dạng hàm của NavLink
+  const { pathname } = useLocation();
+  const isActive = (n: { to: string; end?: boolean }) => (n.end ? pathname === n.to : pathname === n.to || pathname.startsWith(`${n.to}/`));
   return (
     <header className="pointer-events-auto flex h-[66px] items-center gap-4 border-b border-white/60 bg-white/85 px-5 backdrop-blur-md">
       <Dropdown.Root>
@@ -222,7 +230,7 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
               .filter((n) => n.show)
               .map((n) => (
                 <Dropdown.Item key={n.to} asChild>
-                  <NavLink to={n.to} end={n.end} className={({ isActive }) => cn('flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm outline-none data-[highlighted]:bg-slate-50', isActive ? 'font-semibold text-brand' : 'text-ink')}>
+                  <NavLink to={n.to} end={n.end} className={cn('flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm outline-none data-[highlighted]:bg-slate-50', isActive(n) ? 'font-semibold text-brand' : 'text-ink')}>
                     {n.label}
                   </NavLink>
                 </Dropdown.Item>
@@ -253,7 +261,7 @@ export function TopBar({ siteCode, timeZone, siteId }: { siteCode: string; timeZ
               .filter((n) => n.show)
               .map((n) => (
                 <Dropdown.Item key={n.to} asChild>
-                  <NavLink to={n.to} end={n.end} className="flex cursor-pointer items-center rounded-lg px-2 py-2 text-sm outline-none data-[highlighted]:bg-slate-50">
+                  <NavLink to={n.to} end={n.end} className={cn('flex cursor-pointer items-center rounded-lg px-2 py-2 text-sm outline-none data-[highlighted]:bg-slate-50', isActive(n) && 'font-semibold text-brand')}>
                     {n.label}
                   </NavLink>
                 </Dropdown.Item>

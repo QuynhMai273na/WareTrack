@@ -17,6 +17,7 @@ export const SkuDto = z.object({
   id: Uuid,
   code: z.string(),
   name: z.string(),
+  category: z.string().nullable(),
   baseUom: z.string(),
   uomDecimals: z.number(),
   lotTracked: z.boolean(),
@@ -34,6 +35,8 @@ export const CreateSkuRequest = z
   .object({
     code: z.string().regex(/^[A-Z0-9-]{3,40}$/),
     name: z.string().min(2).max(200),
+    /** Nhóm hàng hiển thị (Packaging, PPE, Grocery…). */
+    category: z.string().max(40).optional(),
     baseUom: z.string().min(1).max(10).default('EA'),
     uomDecimals: z.number().int().min(0).max(3).default(0),
     lotTracked: z.boolean().default(false),

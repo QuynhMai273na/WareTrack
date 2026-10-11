@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Equipment, EquipmentStatus } from '@prisma/client';
-import { ErrorCode, type SnapshotForklift } from '@waretrack/shared-schemas';
+import { type CreateEquipmentRequest, ErrorCode, type SnapshotForklift, type UpdateEquipmentRequest } from '@waretrack/shared-schemas';
 import { AuditService } from '../../platform/audit/audit.service';
 import { DomainError } from '../../platform/errors/domain-error';
 import { OutboxService } from '../../platform/outbox/outbox.service';
@@ -74,6 +74,69 @@ export class EquipmentService {
       await this.publish(tx, updated, e.status, { lowBattery });
       return updated;
     });
+  }
+
+  /** Đăng ký xe nâng mới cho site (vận hành thật) — trạng thái ban đầu OFFLINE tới khi người lái nhận xe. */
+  async create(siteId: string, body: CreateEquipmentRequest) {
+    return this.tx.run(async (tx) => {
+      if (await tx.equipment.findFirst({ where: { siteId, code: body.code, deletedAt: null } })) throw DomainError.rule(ErrorCode.CODE_ALREADY_EXISTS, `Equipment ${body.code} already exists at this site`);
+      await this.assertChargerAndOperator(tx, siteId, body.chargerLocationId ?? null, body.operatorUserId ?? null);
+      const created = await tx.equipment.create({
+        data: {
+          siteId,
+          code: body.code,
+          equipmentType: body.equipmentType,
+          model: body.model ?? null,
+          status: 'OFFLINE',
+          chargerLocationId: body.chargerLocationId ?? null,
+          currentOperatorId: body.operatorUserId ?? null,
+          telemetry: { batteryPct: 100, speedKmh: 0, movesToday: 0 },
+          telemetryAt: new Date(),
+          telemetrySource: 'CONFIRMED_MANUAL',
+        },
+      });
+      await this.audit.record(tx, { siteId, action: 'EQUIPMENT_CREATED', entityType: 'Equipment', entityId: created.id, diff: { after: { code: created.code, model: created.model } } });
+      await this.publish(tx, created, created.status, {});
+      return created;
+    });
+  }
+
+  async update(siteId: string, equipmentId: string, body: UpdateEquipmentRequest) {
+    return this.tx.run(async (tx) => {
+      const before = await tx.equipment.findFirst({ where: { id: equipmentId, siteId, deletedAt: null } });
+      if (!before) throw DomainError.notFound('Equipment');
+      await this.assertChargerAndOperator(tx, siteId, body.chargerLocationId ?? null, body.operatorUserId ?? null);
+      const updated = await tx.equipment.update({
+        where: { id: equipmentId },
+        data: {
+          ...(body.model !== undefined ? { model: body.model } : {}),
+          ...(body.chargerLocationId !== undefined ? { chargerLocationId: body.chargerLocationId } : {}),
+          ...(body.operatorUserId !== undefined ? { currentOperatorId: body.operatorUserId } : {}),
+          version: { increment: 1 },
+        },
+      });
+      await this.audit.record(tx, {
+        siteId,
+        action: 'EQUIPMENT_UPDATED',
+        entityType: 'Equipment',
+        entityId: equipmentId,
+        diff: { before: { model: before.model, operator: before.currentOperatorId, charger: before.chargerLocationId }, after: { model: updated.model, operator: updated.currentOperatorId, charger: updated.chargerLocationId } },
+      });
+      await this.publish(tx, updated, before.status, {});
+      return updated;
+    });
+  }
+
+  /** Trạm sạc phải là location CHARGER của site; người lái phải có quyền tại site (vai trò bất kỳ). */
+  private async assertChargerAndOperator(tx: Tx, siteId: string, chargerLocationId: string | null, operatorUserId: string | null) {
+    if (chargerLocationId) {
+      const charger = await tx.location.findFirst({ where: { id: chargerLocationId, siteId, deletedAt: null } });
+      if (!charger || charger.locationType !== 'CHARGER') throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Charger must be a charging bay of this site');
+    }
+    if (operatorUserId) {
+      const assignment = await tx.userSiteRole.findFirst({ where: { userId: operatorUserId, revokedAt: null, OR: [{ siteId }, { siteId: null }] } });
+      if (!assignment) throw DomainError.rule(ErrorCode.VALIDATION_ERROR, 'Operator has no role at this site');
+    }
   }
 
   async list(siteId: string): Promise<Equipment[]> {

@@ -61,6 +61,8 @@ function invalidateRelated(qc: QueryClient, siteId: string, e: RealtimeEnvelope)
   if (e.type === 'exception.raised') keys.push(['site', siteId, 'exceptions']);
   if (e.type.startsWith('vehicle.')) keys.push(['site', siteId, 'vehicles'], ['vehicle-history']);
   if (e.type === 'slot.status_changed') keys.push(['site', siteId, 'vehicles', 'slots']);
+  // Sơ đồ vừa publish → tải lại layout + snapshot (vị trí mới/đổi) cho scene 3D và các bảng
+  if (e.type === 'layout.published') keys.push(['site', siteId, 'layout'], ['site', siteId, 'snapshot'], ['admin', 'locations', siteId]);
   for (const k of keys) void qc.invalidateQueries({ queryKey: k });
 }
 

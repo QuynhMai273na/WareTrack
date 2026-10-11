@@ -1,69 +1,11 @@
 /**
  * Bộ dựng layout thủ tục cho site demo (DEC-56): không có bản vẽ thật, layout hư cấu theo phong cách video.
- * Hệ tọa độ (mục 18.2): mét, Y-up, +X = đông, +Z = nam; gốc ở góc tây-bắc của khu đất.
+ * Kiểu dữ liệu dùng chung nằm ở src/modules/site-setup/layout/layout-spec.ts.
  */
-import type { DockDirection, LocationType, ZoneType } from '@prisma/client';
+import type { DockDirection } from '@prisma/client';
+import type { BuildingSpec, DecorSpec, LocationSpec, SiteLayoutSpec, ZoneSpec } from '../../src/modules/site-setup/layout/layout-spec';
 
-export interface ZoneSpec {
-  code: string;
-  name: string;
-  zoneType: ZoneType;
-  rect: { x: number; z: number; w: number; d: number };
-  color: string;
-}
-
-export interface LocationSpec {
-  zone: string;
-  code: string;
-  type: LocationType;
-  capacity: number;
-  single: boolean;
-  pos: { x: number; z: number; rotY: number };
-  size: { x: number; z: number };
-  dockDirection?: DockDirection;
-  doorNumber?: string;
-  lengthM?: number;
-  widthM?: number;
-  /** Nhãn hiển thị (Bay 1, Yard slot S01…) */
-  label?: string;
-  /** Cách vẽ: rack, ô sàn viền vàng */
-  display?: 'rack' | 'floor';
-  levels?: number;
-  bays?: number;
-  /** Vị trí trong nhà: không tạo layout object */
-  noLayout?: boolean;
-}
-
-export interface BuildingSpec {
-  code: string;
-  label: string;
-  rect: { x: number; z: number; w: number; d: number };
-  height: number;
-  roofColor: string;
-  wallColor: string;
-  style?: import('./builder').BuildingStyle;
-}
-
-export interface DecorSpec {
-  kind: 'tree' | 'bush' | 'container' | 'road' | 'fence' | 'lamp' | 'cones' | 'silo' | 'shed' | 'neighbor' | 'crosswalk' | 'lanes' | 'pad' | 'parked' | 'platform';
-  x: number;
-  z: number;
-  rotY?: number;
-  w?: number;
-  d?: number;
-  color?: string;
-  label?: string;
-  h?: number;
-  props?: Record<string, unknown>;
-}
-
-export interface SiteLayoutSpec {
-  bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
-  zones: ZoneSpec[];
-  locations: LocationSpec[];
-  buildings: BuildingSpec[];
-  decor: DecorSpec[];
-}
+export type { BuildingSpec, DecorSpec, LocationSpec, SiteLayoutSpec, ZoneSpec } from '../../src/modules/site-setup/layout/layout-spec';
 
 export interface WarehouseOptions {
   docks: Array<{ code: string; direction: DockDirection }>;

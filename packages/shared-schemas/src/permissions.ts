@@ -68,6 +68,7 @@ export const PERMISSION_MATRIX = {
   'inventory.reversal': [SM],
   'inventory.count.manage': [SM, WS, IC],
   'inventory.count.execute': [WS, WO, IC],
+  'inventory.opening.import': [ADM, SM, IC],
   'inbound.order.manage': [SM, WS],
   'inbound.receive': [SM, WS, WO],
   'inbound.qc': [SM, WS],

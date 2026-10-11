@@ -58,6 +58,7 @@ export class InventoryQueryService implements OnModuleInit {
       id: s.id,
       code: s.code,
       name: s.name,
+      category: s.category,
       baseUom: s.baseUom,
       uomDecimals: s.uomDecimals,
       lotTracked: s.lotTracked,

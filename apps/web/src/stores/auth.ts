@@ -43,7 +43,9 @@ export const useAuth = create<AuthState>((set, get) => ({
   can(siteId, permission) {
     const me = get().me;
     if (!me) return false;
-    if (!siteId) return me.enterprisePermissions.includes(permission) || me.sites.some((s) => s.permissions.includes(permission));
-    return me.sites.find((s) => s.id === siteId)?.permissions.includes(permission) ?? false;
+    // Vai trò cấp doanh nghiệp (admin) áp dụng cho mọi site — kể cả site vừa tạo chưa có trong `me.sites`
+    if (me.enterprisePermissions.includes(permission)) return true;
+    if (!siteId) return me.sites.some((site) => site.permissions.includes(permission));
+    return me.sites.find((site) => site.id === siteId)?.permissions.includes(permission) ?? false;
   },
 }));

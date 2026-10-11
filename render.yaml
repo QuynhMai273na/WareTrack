@@ -41,3 +41,9 @@ services:
       # Dựng và chạy kịch bản xe/xe nâng giống video demo (DemoDirector, DEC-51)
       - key: DEMO_DIRECTOR
         value: "true"
+      # ── Vận hành thật (DEC-62): đổi SEED_ON_EMPTY và DEMO_DIRECTOR thành "false", rồi bỏ comment hai secret dưới
+      #    để API tạo admin đầu tiên khi database chưa có user.
+      # - key: BOOTSTRAP_ADMIN_USERNAME
+      #   sync: false
+      # - key: BOOTSTRAP_ADMIN_PASSWORD
+      #   sync: false
