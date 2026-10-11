@@ -15,11 +15,15 @@ export class HealthController {
     return { status: 'ok' };
   }
 
-  /** Chế độ chạy cho màn hình đăng nhập: demo (hiện tài khoản mẫu) hay vận hành thật. */
+  /**
+   * Chế độ chạy: `mode` cho màn hình đăng nhập (demo hiện tài khoản mẫu / live), `motion` cho bản đồ 3D —
+   * `auto` khi DemoDirector tự vận hành (xe nâng chạy vòng liên tục), `manual` khi mọi chuyển động đến từ thao tác người dùng.
+   */
   @Get('info')
   info() {
-    const demoMode = ['true', 'scene'].includes(process.env.DEMO_DIRECTOR ?? '') || process.env.SEED_ON_EMPTY === 'true';
-    return { mode: demoMode ? 'demo' : 'live' };
+    const directorMode = process.env.DEMO_DIRECTOR ?? '';
+    const demoMode = ['true', 'scene'].includes(directorMode) || process.env.SEED_ON_EMPTY === 'true';
+    return { mode: demoMode ? 'demo' : 'live', motion: directorMode === 'true' ? 'auto' : 'manual' };
   }
 
   @Get('ready')

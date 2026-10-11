@@ -3,13 +3,16 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { SiteSnapshot, SnapshotTruck } from '@waretrack/shared-schemas';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useRunInfo } from '@/lib/queries';
 import { useScene, type SelectableType } from '@/stores/scene';
+import { useTraffic } from '@/stores/traffic';
 import { Animated } from './Animated';
 import { type LayoutIndex, outward, type Placed, tangent } from './layoutIndex';
 import { CarModel, ForkliftModel, MapPin, PalletModel, TruckModel } from './models';
-import { exitPlan, forkliftDockSpots, truckTarget, type TruckTarget, type Waypoint } from './motion';
+import { dockingApproach, EN_ROUTE_SPEED, exitPlan, forkliftDockSpots, truckTarget, type TruckTarget, type Waypoint } from './motion';
+import { polylineLength, projectOntoPolyline, type SiteRoutes, slicePolyline } from './network';
 import { PathFollower, ShuttleMover } from './Movers';
-import { getObject, objectKey, registerObject } from './registry';
+import { objectKey, registerObject, takePose } from './registry';
 
 function useSelectHandlers(siteId: string, type: SelectableType, id: string) {
   const select = useScene((state) => state.select);
@@ -111,7 +114,7 @@ const Truck = memo(function Truck({ siteId, truck, target, selected, hovered }: 
   const { t } = useTranslation();
   const handlers = useSelectHandlers(siteId, 'truck', truck.visitId);
   return (
-    <PathFollower objectKey={objectKey('truck', truck.visitId)} target={target}>
+    <PathFollower objectKey={objectKey('truck', truck.visitId)} target={target} speed={truck.status === 'SCHEDULED' ? EN_ROUTE_SPEED * 1.25 : 7}>
       <group {...handlers}>
         <TruckModel carrier={truck.carrier} type={truck.truckType} />
       </group>
@@ -120,17 +123,18 @@ const Truck = memo(function Truck({ siteId, truck, target, selected, hovered }: 
   );
 });
 
-/** Xe vừa rời dock (EXITED): chạy ra theo lanes.exit rồi biến mất (chỉ là animation). */
-function DepartingTruck({ ghost, layout, onDone }: { ghost: { id: string; truck: SnapshotTruck; from: { x: number; z: number; rotY: number } }; layout: LayoutIndex; onDone: () => void }) {
+type DepartingGhost = { id: string; truck: SnapshotTruck; from: { x: number; z: number; rotY: number }; plan: Waypoint[]; destinationSiteId?: string };
+
+/** Xe vừa rời site (EXITED): chạy hết lộ trình rời (lối ra → đại lộ → site khác / ra khỏi bản đồ) rồi mới thôi vẽ. */
+function DepartingTruck({ ghost, onDone }: { ghost: DepartingGhost; onDone: () => void }) {
   const [target, setTarget] = useState<TruckTarget>(() => ({ key: 'start', x: ghost.from.x, z: ghost.from.z, rotY: ghost.from.rotY, visible: true, plan: () => [] }));
   useEffect(() => {
-    const plan = exitPlan(ghost.from, layout);
-    const last = plan[plan.length - 1] ?? ghost.from;
-    const id = setTimeout(() => setTarget({ key: 'exit', x: last.x, z: last.z, rotY: ghost.from.rotY, visible: true, plan: () => plan }), 50);
+    const last = ghost.plan[ghost.plan.length - 1] ?? ghost.from;
+    const id = setTimeout(() => setTarget({ key: 'exit', x: last.x, z: last.z, rotY: ghost.from.rotY, visible: true, plan: () => ghost.plan }), 50);
     return () => clearTimeout(id);
-  }, [ghost, layout]);
+  }, [ghost]);
   return (
-    <PathFollower objectKey={`ghost:${ghost.id}`} target={target} onIdle={() => target.key === 'exit' && onDone()}>
+    <PathFollower objectKey={`ghost:${ghost.id}`} target={target} speed={9} onIdle={() => target.key === 'exit' && onDone()}>
       <TruckModel carrier={ghost.truck.carrier} type={ghost.truck.truckType} />
     </PathFollower>
   );
@@ -307,11 +311,16 @@ function nearestStaging(layout: LayoutIndex, from: { x: number; z: number }, pal
   return list.reduce<Placed | undefined>((best, location) => (!best || Math.hypot(location.x - from.x, location.z - from.z) < Math.hypot(best.x - from.x, best.z - from.z) ? location : best), undefined);
 }
 
-const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pallets, index, selected, hovered }: { siteId: string; forklift: SiteSnapshot['forklifts'][number]; layout: LayoutIndex; trucks: SnapshotTruck[]; pallets: SiteSnapshot['pallets']; index: number; selected: boolean; hovered: boolean }) {
+const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pallets, shipments, autoplay, index, selected, hovered }: { siteId: string; forklift: SiteSnapshot['forklifts'][number]; layout: LayoutIndex; trucks: SnapshotTruck[]; pallets: SiteSnapshot['pallets']; shipments: SiteSnapshot['activeShipments']; autoplay: boolean; index: number; selected: boolean; hovered: boolean }) {
   const handlers = useSelectHandlers(siteId, 'forklift', forklift.id);
   const dim = forklift.status === 'OFFLINE' || forklift.status === 'MAINTENANCE';
   const busy = forklift.status === 'BUSY' || forklift.status === 'ASSIGNED';
-  const dock = busy ? dockFromSummary(forklift.taskSummary, layout, trucks) : undefined;
+  const summaryDock = busy ? dockFromSummary(forklift.taskSummary, layout, trucks) : undefined;
+  const dockTruck = summaryDock ? trucks.find((truck) => truck.dockLocationId === summaryDock.id) : undefined;
+  // Thủ công: chỉ đứng làm việc ở dock khi thật sự có xe tải đỗ ở đó (xe đã đi thì về trạm sạc)
+  const dock = autoplay || dockTruck ? summaryDock : undefined;
+  // Số pallet đã xếp/nhận của lô hàng gắn với xe tải ở dock — tăng lên là xe nâng chạy một chuyến
+  const tripCount = dockTruck ? (shipments.find((shipment) => shipment.visitId === dockTruck.visitId)?.progress.done ?? 0) : 0;
   const label = selected || hovered ? <SceneLabel y={4.2} text={forklift.code} sub={busy ? (forklift.taskSummary?.startsWith('Unloading') ? 'Unloading truck' : 'Loading truck') : forklift.status === 'CHARGING' ? 'Charging' : 'Idle'} selected={selected} /> : null;
   if (dock) {
     const spots = forkliftDockSpots(dock);
@@ -326,6 +335,8 @@ const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pall
         startPoint={shuttleStart}
         endPoint={shuttleEnd}
         phase={index * 5.3}
+        autoplay={autoplay}
+        tripCount={tripCount}
         render={(carrying) => (
           <group {...handlers} scale={1.25}>
             <ForkliftModel dim={dim} carrying={carrying} />
@@ -351,9 +362,11 @@ const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pall
 });
 
 /** Các layer động: dữ liệu lấy từ Business State (snapshot trong TanStack Query). */
-export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; layout: LayoutIndex }) {
+export function DynamicLayers({ snapshot, layout, routes, transferTargetFor }: { snapshot: SiteSnapshot; layout: LayoutIndex; routes?: SiteRoutes; transferTargetFor?: (truckCode: string) => string | undefined }) {
   const selection = useScene((state) => state.selection);
   const hover = useScene((state) => state.hover);
+  // Xe nâng chạy vòng liên tục chỉ khi DemoDirector tự vận hành; còn lại chỉ chạy theo thao tác thật
+  const autoplay = useRunInfo().data?.motion === 'auto';
   const siteId = snapshot.site.id;
   const sel = (type: SelectableType, id: string) => selection?.type === type && selection.id === id;
   const hov = (type: SelectableType, id: string) => hover?.type === type && hover.id === id;
@@ -365,25 +378,55 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
     return () => clearInterval(id);
   }, []);
 
+  // Xe đang chạy từ site khác tới đây: ẩn bản "đang tới" cho tới khi chuyến chuyển site chạy xong
+  const inTransit = useTraffic((state) => state.inTransit);
+  // Xe đã hiển thị ít nhất một lần; xe mới (sau lần tải đầu) chạy từ ngoài bản đồ vào thay vì hiện ra giữa đường
+  const shownVisits = useRef(new Set<string>());
+  const firstLoadDone = useRef(false);
   const truckTargets = useMemo(() => {
     let waiting = 0;
-    return snapshot.trucks.map((truck) => ({ truck, target: truckTarget(truck, layout, truck.status === 'WAITING' ? waiting++ : waiting, now) }));
-  }, [snapshot.trucks, layout, now]);
+    return snapshot.trucks.map((truck) => {
+      const approach = routes?.approachFor(truck.truckCode);
+      const target = truckTarget(truck, layout, truck.status === 'WAITING' ? waiting++ : waiting, now, approach);
+      const arrivingFromOtherSite = truck.status === 'SCHEDULED' && inTransit[truck.truckCode] === snapshot.site.id;
+      if (arrivingFromOtherSite) return { truck, target: { ...target, visible: false } };
+      const enteringMap = firstLoadDone.current && target.visible && !shownVisits.current.has(truck.visitId) && approach && approach.length >= 2;
+      const spawn = enteringMap ? { x: approach[0].x, z: approach[0].z, rotY: Math.atan2(approach[1].x - approach[0].x, approach[1].z - approach[0].z) } : undefined;
+      return { truck, target: spawn ? { ...target, spawn } : target };
+    });
+  }, [snapshot.trucks, snapshot.site.id, layout, now, routes, inTransit]);
+  useEffect(() => {
+    for (const { truck, target } of truckTargets) if (target.visible) shownVisits.current.add(truck.visitId);
+    firstLoadDone.current = true;
+  }, [truckTargets]);
 
-  // Xe biến khỏi snapshot (đã rời site) → chạy ra đường rồi biến mất
+  // Xe biến khỏi snapshot (đã rời site / bị từ chối ở cổng) → chạy hết lộ trình rời rồi mới thôi vẽ, không biến mất tại chỗ
   const prevTrucks = useRef(new Map<string, SnapshotTruck>());
-  const [ghosts, setGhosts] = useState<Array<{ id: string; truck: SnapshotTruck; from: { x: number; z: number; rotY: number } }>>([]);
+  const [ghosts, setGhosts] = useState<DepartingGhost[]>([]);
+  const beginTransit = useTraffic((state) => state.beginTransit);
+  const endTransit = useTraffic((state) => state.endTransit);
   useEffect(() => {
     const current = new Map(snapshot.trucks.map((truck) => [truck.visitId, truck]));
-    const gone: typeof ghosts = [];
+    const gone: DepartingGhost[] = [];
     for (const [id, previousTruck] of prevTrucks.current) {
-      if (current.has(id) || !['HANDLING', 'AT_DOCK', 'READY_TO_LEAVE'].includes(previousTruck.status)) continue;
-      const obj = getObject(objectKey('truck', id));
-      if (obj) gone.push({ id: `${id}:${Date.now()}`, truck: previousTruck, from: { x: obj.position.x, z: obj.position.z, rotY: obj.rotation.y } });
+      if (current.has(id)) continue;
+      const pose = takePose(objectKey('truck', id));
+      if (!pose?.visible) continue;
+      const from = { x: pose.x, z: pose.z, rotY: pose.rotY };
+      // Chuyến tiếp theo ở site khác → chạy thẳng sang đó; quay lại chính site này thì cứ ra khỏi bản đồ
+      const nextSiteId = transferTargetFor?.(previousTruck.truckCode);
+      const destinationSiteId = nextSiteId && nextSiteId !== snapshot.site.id ? nextSiteId : undefined;
+      const plan = exitPlan(from, layout, { departure: routes?.departureFor(previousTruck.truckCode, destinationSiteId), approach: routes?.approachFor(previousTruck.truckCode), leftFrom: previousTruck.status });
+      if (destinationSiteId) beginTransit(previousTruck.truckCode, destinationSiteId);
+      gone.push({ id: `${id}:${Date.now()}`, truck: previousTruck, from, plan, destinationSiteId });
     }
     prevTrucks.current = current;
     if (gone.length) setGhosts((previousGhosts) => [...previousGhosts, ...gone]);
-  }, [snapshot.trucks]);
+  }, [snapshot.trucks, snapshot.site.id, layout, routes, transferTargetFor, beginTransit]);
+  const finishGhost = (ghost: DepartingGhost) => {
+    setGhosts((all) => all.filter((otherGhost) => otherGhost.id !== ghost.id));
+    if (ghost.destinationSiteId) endTransit(ghost.truck.truckCode);
+  };
 
   const stagedPins = useMemo(() => {
     const locs = new Set<string>();
@@ -397,9 +440,16 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
   const selectedTruck = selection?.type === 'truck' ? truckTargets.find((truckEntry) => truckEntry.truck.visitId === selection.id) : undefined;
   const ribbon = useMemo(() => {
     if (!selectedTruck || !['SCHEDULED', 'AT_GATE', 'DOCK_ASSIGNED'].includes(selectedTruck.truck.status)) return null;
-    const { target } = selectedTruck;
+    const { target, truck } = selectedTruck;
+    const approach = routes?.approachFor(truck.truckCode);
+    if (truck.status === 'SCHEDULED' && approach && approach.length >= 2) {
+      // Xe đang tới: phần đường còn lại tới cổng + đường lùi vào bay đã đặt trước (nếu có)
+      const remaining = slicePolyline(approach, projectOntoPolyline(approach, target).travelled, polylineLength(approach));
+      const bookedDock = truck.dockLocationId ? layout.byLocation.get(truck.dockLocationId) : undefined;
+      return [...remaining, ...(bookedDock ? dockingApproach(bookedDock, 9) : [])];
+    }
     return [{ x: target.x, z: target.z }, ...target.plan({ x: target.x, z: target.z })];
-  }, [selectedTruck]);
+  }, [selectedTruck, routes, layout]);
 
   return (
     <group>
@@ -409,7 +459,7 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
       })}
       {truckTargets.map(({ truck, target }) => (target.visible ? <Truck key={truck.visitId} siteId={siteId} truck={truck} target={target} selected={sel('truck', truck.visitId)} hovered={hov('truck', truck.visitId)} /> : null))}
       {ghosts.map((ghost) => (
-        <DepartingTruck key={ghost.id} ghost={ghost} layout={layout} onDone={() => setGhosts((all) => all.filter((otherGhost) => otherGhost.id !== ghost.id))} />
+        <DepartingTruck key={ghost.id} ghost={ghost} onDone={() => finishGhost(ghost)} />
       ))}
       {truckTargets
         .filter(({ truck, target }) => truck.status === 'DOCK_ASSIGNED' && target.visible && truck.dockLocationId)
@@ -419,7 +469,7 @@ export function DynamicLayers({ snapshot, layout }: { snapshot: SiteSnapshot; la
         })}
       {ribbon ? <RouteRibbon points={ribbon} /> : null}
       {snapshot.forklifts.map((forklift, forkliftIndex) => (
-        <Forklift key={forklift.id} siteId={siteId} forklift={forklift} layout={layout} trucks={snapshot.trucks} pallets={snapshot.pallets} index={forkliftIndex} selected={sel('forklift', forklift.id)} hovered={hov('forklift', forklift.id)} />
+        <Forklift key={forklift.id} siteId={siteId} forklift={forklift} layout={layout} trucks={snapshot.trucks} pallets={snapshot.pallets} shipments={snapshot.activeShipments} autoplay={autoplay} index={forkliftIndex} selected={sel('forklift', forklift.id)} hovered={hov('forklift', forklift.id)} />
       ))}
       <Pallets siteId={siteId} pallets={snapshot.pallets} layout={layout} selectedId={selection?.type === 'pallet' ? selection.id : null} />
       {stagedPins.map((pinLocation) => (

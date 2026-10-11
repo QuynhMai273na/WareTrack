@@ -23,6 +23,10 @@ import type {
 } from '@waretrack/shared-schemas';
 import { api } from './api';
 
+/** Chế độ chạy của API: demo/live (màn đăng nhập) và auto/manual (xe nâng 3D chạy vòng hay chỉ chạy khi có thao tác). */
+export type RunInfo = { mode: 'demo' | 'live'; motion: 'auto' | 'manual' };
+export const useRunInfo = () => useQuery({ queryKey: ['health', 'info'], queryFn: () => api<RunInfo>('/health/info'), staleTime: Infinity });
+
 /** Query key theo mục 17.7 — luôn có siteId để không lẫn dữ liệu giữa các site. */
 export const useSites = () => useQuery({ queryKey: ['sites'], queryFn: () => api<SiteSummary[]>('/sites'), staleTime: 30_000 });
 

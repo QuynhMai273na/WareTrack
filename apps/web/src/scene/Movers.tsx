@@ -16,12 +16,21 @@ export function PathFollower({ objectKey, target, speed = 7, reverseSpeed = 2.6,
   const heading = useRef(target.rotY);
   const lastKey = useRef<string | null>(null);
   const moving = useRef(false);
+  /** Vừa xuất hiện ở ngoài bản đồ: chạy nhanh hơn cho tới khi bắt kịp vị trí nghiệp vụ. */
+  const catchingUp = useRef(false);
   const invalidate = useThree((state) => state.invalidate);
 
   useEffect(() => {
     const group = ref.current;
     if (!group) return;
-    if (lastKey.current === null) {
+    if (lastKey.current === null && target.spawn) {
+      group.position.set(target.spawn.x, 0, target.spawn.z);
+      heading.current = target.spawn.rotY;
+      group.rotation.y = target.spawn.rotY;
+      const plan = target.plan(target.spawn);
+      queue.current = plan.length ? plan : [{ x: target.x, z: target.z }];
+      catchingUp.current = true;
+    } else if (lastKey.current === null) {
       group.position.set(target.x, 0, target.z);
       heading.current = target.rotY;
       group.rotation.y = target.rotY;
@@ -45,6 +54,7 @@ export function PathFollower({ objectKey, target, speed = 7, reverseSpeed = 2.6,
     const dt = Math.min(rawDt, 0.1);
     const next = queue.current[0];
     if (!next) {
+      catchingUp.current = false;
       if (moving.current) {
         moving.current = false;
         onIdle?.();
@@ -61,7 +71,13 @@ export function PathFollower({ objectKey, target, speed = 7, reverseSpeed = 2.6,
     const dx = next.x - group.position.x;
     const dz = next.z - group.position.z;
     const dist = Math.hypot(dx, dz);
-    const travelSpeed = next.reverse ? reverseSpeed : speed;
+    let travelSpeed = next.reverse ? reverseSpeed : speed;
+    if (catchingUp.current && !next.reverse) {
+      // Còn xa đích thì chạy nhanh (tối đa ×3), tới gần thì về tốc độ thường
+      let remaining = dist;
+      for (let waypointIndex = 1; waypointIndex < queue.current.length; waypointIndex++) remaining += Math.hypot(queue.current[waypointIndex].x - queue.current[waypointIndex - 1].x, queue.current[waypointIndex].z - queue.current[waypointIndex - 1].z);
+      travelSpeed = Math.max(speed, Math.min(speed * 3, (speed * remaining) / 40));
+    }
     if (dist < 0.05) {
       queue.current.shift();
       invalidate();
@@ -85,22 +101,52 @@ export function PathFollower({ objectKey, target, speed = 7, reverseSpeed = 2.6,
 
 /**
  * Xe nâng đang làm việc: đi lại giữa hai điểm (xe tải ↔ khu staging), nửa đường mang pallet.
- * Chu kỳ theo thời gian thực, lệch pha theo mã xe để không trùng nhau.
+ * `autoplay` (DemoDirector tự chạy): chạy vòng liên tục theo thời gian thực, lệch pha theo mã xe để không trùng nhau.
+ * Thủ công: đứng chờ ở điểm xuất phát và chỉ chạy một chuyến mỗi khi `tripCount` tăng (có pallet được xếp/nhận thật).
  */
-export function ShuttleMover({ objectKey, startPoint, endPoint, phase, period = 18, render }: { objectKey: string; startPoint: { x: number; z: number }; endPoint: { x: number; z: number }; phase: number; period?: number; render: (carrying: boolean) => ReactNode }) {
+export function ShuttleMover({ objectKey, startPoint, endPoint, phase, period = 18, autoplay, tripCount, render }: { objectKey: string; startPoint: { x: number; z: number }; endPoint: { x: number; z: number }; phase: number; period?: number; autoplay: boolean; tripCount: number; render: (carrying: boolean) => ReactNode }) {
   const ref = useRef<Group>(null);
   const carrying = useRef(false);
   const holder = useRef<Group>(null);
   const loaded = useRef<Group>(null);
   const empty = useRef<Group>(null);
+  const previousTripCount = useRef(tripCount);
+  const pendingTrips = useRef(0);
+  const tripStartedAt = useRef<number | null>(null);
   const invalidate = useThree((state) => state.invalidate);
   useEffect(() => {
     if (ref.current) return registerObject(objectKey, ref.current);
   }, [objectKey]);
+  useEffect(() => {
+    // Mỗi pallet mới được xếp/nhận = một chuyến; nhiều thao tác liên tiếp thì xếp hàng chạy lần lượt
+    if (tripCount > previousTripCount.current) pendingTrips.current += tripCount - previousTripCount.current;
+    previousTripCount.current = tripCount;
+    invalidate();
+  }, [tripCount, invalidate]);
+  // Đổi chế độ / điểm đi-đến: vẽ lại một khung để xe đứng đúng chỗ (demand frameloop)
+  useEffect(() => invalidate(), [autoplay, startPoint.x, startPoint.z, endPoint.x, endPoint.z, invalidate]);
   useFrame(({ clock }) => {
     const group = ref.current;
     if (!group) return;
-    const cycleProgress = ((clock.elapsedTime + phase) % period) / period;
+    let cycleProgress = 0;
+    let moving = autoplay;
+    if (autoplay) cycleProgress = ((clock.elapsedTime + phase) % period) / period;
+    else {
+      if (tripStartedAt.current === null && pendingTrips.current > 0) {
+        pendingTrips.current -= 1;
+        tripStartedAt.current = clock.elapsedTime;
+      }
+      if (tripStartedAt.current !== null) {
+        // Chuyến thủ công ngắn hơn vòng tự chạy để phản hồi thao tác nhanh
+        const tripProgress = (clock.elapsedTime - tripStartedAt.current) / (period * 0.6);
+        if (tripProgress >= 1) tripStartedAt.current = null;
+        else {
+          cycleProgress = tripProgress;
+          moving = true;
+        }
+      }
+      if (!moving && pendingTrips.current > 0) moving = true;
+    }
     // 0–0.1 dừng lấy hàng · 0.1–0.45 chở tới B · 0.45–0.55 đặt hàng · 0.55–0.9 quay về · 0.9–1 chờ
     let travelFraction: number;
     let dir: 1 | -1 = 1;
@@ -116,13 +162,14 @@ export function ShuttleMover({ objectKey, startPoint, endPoint, phase, period = 
     // Xe nâng chở hàng đi lùi ra khỏi xe tải rồi quay đầu: đơn giản hóa — luôn hướng càng về phía điểm đến
     const heading = Math.atan2(endPoint.x - startPoint.x, endPoint.z - startPoint.z);
     group.rotation.y = dir === 1 ? heading : heading + Math.PI;
-    const isCarrying = cycleProgress >= 0.05 && cycleProgress < 0.5;
+    const isCarrying = moving && cycleProgress >= 0.05 && cycleProgress < 0.5;
     if (isCarrying !== carrying.current) {
       carrying.current = isCarrying;
       if (loaded.current) loaded.current.visible = isCarrying;
       if (empty.current) empty.current.visible = !isCarrying;
     }
-    invalidate();
+    // Đứng chờ thì không yêu cầu vẽ tiếp — cảnh đứng yên, không tốn GPU
+    if (moving) invalidate();
   });
   return (
     <group ref={ref}>

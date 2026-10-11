@@ -1,11 +1,12 @@
 import { AdaptiveDpr, Environment, Html, Lightformer, OrthographicCamera, PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame } from '@react-three/fiber';
 import type { PublishedLayout, SiteSnapshot } from '@waretrack/shared-schemas';
-import { memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { type DirectionalLight, NeutralToneMapping } from 'three';
+import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type DirectionalLight, type InstancedMesh, NeutralToneMapping, Object3D } from 'three';
 import { useScene } from '@/stores/scene';
 import { DynamicLayers } from './DynamicLayers';
 import { indexLayout, type LayoutIndex } from './layoutIndex';
+import { buildRoadNetwork, type RoadPiece, type SiteRoutes } from './network';
 import { type CameraFraming, CameraRig, SelectionBracket } from './SceneControls';
 import { StaticLayout } from './StaticLayout';
 
@@ -50,11 +51,73 @@ function SunLight({ center, half }: { center: { x: number; z: number }; half: nu
 }
 
 /** Một site trên bản đồ chung: layout tĩnh + lớp động (xe, pallet, xe nâng) dịch theo gốc tọa độ của site. */
-const SiteOnMap = memo(function SiteOnMap({ site, index }: { site: NetworkSite; index: LayoutIndex }) {
+const SiteOnMap = memo(function SiteOnMap({ site, index, routes, transferTargetFor }: { site: NetworkSite; index: LayoutIndex; routes?: SiteRoutes; transferTargetFor: (truckCode: string) => string | undefined }) {
   return (
     <group position={[site.offset.x, 0, site.offset.z]}>
       <StaticLayout layout={index} siteId={site.siteId} />
-      {site.snapshot ? <DynamicLayers snapshot={site.snapshot} layout={index} /> : null}
+      {site.snapshot ? <DynamicLayers snapshot={site.snapshot} layout={index} routes={routes} transferTargetFor={transferTargetFor} /> : null}
+    </group>
+  );
+});
+
+/** Một lớp hộp lặp lại (mặt đường / vạch / lề) vẽ bằng một InstancedMesh — vài draw call cho cả mạng lưới. */
+function InstancedBoxes({ boxes, color, height }: { boxes: Array<{ x: number; y: number; z: number; rotY: number; width: number; length: number }>; color: string; height: number }) {
+  const ref = useRef<InstancedMesh>(null);
+  useLayoutEffect(() => {
+    const mesh = ref.current;
+    if (!mesh) return;
+    const placement = new Object3D();
+    boxes.forEach((box, boxIndex) => {
+      placement.position.set(box.x, box.y, box.z);
+      placement.rotation.set(0, box.rotY, 0);
+      placement.scale.set(box.width, height, box.length);
+      placement.updateMatrix();
+      mesh.setMatrixAt(boxIndex, placement.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [boxes, height]);
+  if (!boxes.length) return null;
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, boxes.length]} receiveShadow>
+      <boxGeometry args={[1, 1, 1]} />
+      <meshStandardMaterial color={color} />
+    </instancedMesh>
+  );
+}
+
+/**
+ * Đường vẽ thêm của mạng lưới: nối lối vào/ra của site tới đại lộ + nhánh đại lộ chạy ra khỏi bản đồ.
+ * Cùng kiểu với Road (mặt đường, vạch giữa đứt, vạch mép, vỉa hè) nhưng gộp instancing.
+ */
+const NetworkRoads = memo(function NetworkRoads({ pieces }: { pieces: RoadPiece[] }) {
+  const layers = useMemo(() => {
+    const surfaces: Array<{ x: number; y: number; z: number; rotY: number; width: number; length: number }> = [];
+    const dashes: typeof surfaces = [];
+    const edges: typeof surfaces = [];
+    const sidewalks: typeof surfaces = [];
+    for (const piece of pieces) {
+      const along = { x: Math.sin(piece.rotY), z: Math.cos(piece.rotY) };
+      const across = { x: Math.cos(piece.rotY), z: -Math.sin(piece.rotY) };
+      // Nhánh đại lộ nằm thấp hơn đại lộ một chút để chỗ chồng lên giao lộ không nhấp nháy
+      const sink = piece.avenue ? -0.012 : 0;
+      const at = (alongOffset: number, acrossOffset: number, y: number) => ({ x: piece.x + along.x * alongOffset + across.x * acrossOffset, y: y + sink, z: piece.z + along.z * alongOffset + across.z * acrossOffset });
+      surfaces.push({ ...at(0, 0, 0.02), rotY: piece.rotY, width: piece.width, length: piece.length });
+      const dashCount = Math.floor(piece.length / 9);
+      for (let dashIndex = 0; dashIndex < dashCount; dashIndex++) dashes.push({ ...at(-piece.length / 2 + 4.5 + dashIndex * 9, 0, 0.045), rotY: piece.rotY, width: 0.28, length: 3.4 });
+      for (const side of [1, -1]) {
+        edges.push({ ...at(0, side * (piece.width / 2 - 0.6), 0.045), rotY: piece.rotY, width: 0.18, length: piece.length });
+        sidewalks.push({ ...at(0, side * (piece.width / 2 + 0.9), 0.1), rotY: piece.rotY, width: 1.8, length: piece.length });
+      }
+    }
+    return { surfaces, dashes, edges, sidewalks };
+  }, [pieces]);
+  return (
+    <group>
+      <InstancedBoxes boxes={layers.surfaces} color="#d3d9f0" height={0.04} />
+      <InstancedBoxes boxes={layers.dashes} color="#ffffff" height={0.01} />
+      <InstancedBoxes boxes={layers.edges} color="#f4f6fd" height={0.01} />
+      <InstancedBoxes boxes={layers.sidewalks} color="#f3f5fc" height={0.2} />
     </group>
   );
 });
@@ -114,6 +177,17 @@ export function SiteScene({
   const current = sites.find((site) => site.siteId === currentSiteId) ?? sites[0];
   const currentIndex = current ? indexes.get(current.siteId) : undefined;
   const network = useMemo(() => sites.map((site) => ({ layout: indexes.get(site.siteId)!, offset: site.offset })).filter((networkEntry) => networkEntry.layout), [sites, indexes]);
+  const offsetsKey = sites.map((site) => `${site.siteId}:${site.offset.x},${site.offset.z}`).join('|');
+  // Mạng đường chung: chỉ dựng lại khi layout hoặc vị trí site trên bản đồ đổi
+  const roadNetwork = useMemo(
+    () => buildRoadNetwork(sites.filter((site) => indexes.has(site.siteId)).map((site) => ({ siteId: site.siteId, offset: site.offset, layout: indexes.get(site.siteId)! }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [indexes, offsetsKey],
+  );
+  // Xe rời site A mà đang có lịch tới site B (cùng mã xe) → chạy thẳng sang B. Đọc snapshot qua ref để hàm ổn định.
+  const scheduledVisits = useRef(new Map<string, string>());
+  scheduledVisits.current = new Map(sites.flatMap((site) => (site.snapshot?.trucks ?? []).filter((truck) => truck.status === 'SCHEDULED').map((truck) => [truck.truckCode, site.siteId] as [string, string])));
+  const transferTargetFor = useCallback((truckCode: string) => scheduledVisits.current.get(truckCode), []);
   if (!current || !currentIndex) return null;
   const bounds = currentIndex.bounds;
   const center = { x: current.offset.x + currentIndex.center.x, z: current.offset.z + currentIndex.center.z };
@@ -143,9 +217,10 @@ export function SiteScene({
           <planeGeometry args={[6000, 6000]} />
           <meshStandardMaterial color="#eceef8" roughness={1} />
         </mesh>
+        <NetworkRoads pieces={roadNetwork.extraRoads} />
         {sites.map((site) => {
           const index = indexes.get(site.siteId);
-          return index ? <SiteOnMap key={site.siteId} site={site} index={index} /> : null;
+          return index ? <SiteOnMap key={site.siteId} site={site} index={index} routes={roadNetwork.routes.get(site.siteId)} transferTargetFor={transferTargetFor} /> : null;
         })}
         <SelectionBracket />
         {sites.length > 1 ? <SiteTags sites={sites} indexes={indexes} currentSiteId={currentSiteId} onPick={onPickSite} /> : null}

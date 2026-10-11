@@ -1,5 +1,6 @@
 import type { SnapshotTruck } from '@waretrack/shared-schemas';
 import { type LayoutIndex, outward, type Placed, tangent, TRUCK_LENGTH } from './layoutIndex';
+import { type Point, pointAtDistance, polylineLength, projectOntoPolyline, slicePolyline } from './network';
 
 /**
  * Animation State (mục 18.4, 18.9 — lane graph): lộ trình hiển thị của xe dẫn xuất từ Business State.
@@ -21,6 +22,8 @@ export interface TruckTarget {
   visible: boolean;
   /** Lộ trình từ vị trí hiện tại (đã bỏ điểm đầu) tới đích. */
   plan: (from: { x: number; z: number }) => Waypoint[];
+  /** Xe mới vào bản đồ: xuất hiện ở điểm này (ngoài bản đồ) rồi chạy theo `plan` tới đích, thay vì hiện ngay tại đích. */
+  spawn?: { x: number; z: number; rotY: number };
 }
 
 const waypoint = (x: number, z: number, reverse?: boolean): Waypoint => ({ x, z, reverse });
@@ -49,7 +52,7 @@ export function dockPose(dock: Placed) {
 }
 
 /** Lộ trình lùi chuồng vào bay: chạy tới điểm lệch sang bên, rồi lùi theo cung vào trục bay. */
-function dockingApproach(dock: Placed, stopShort: number): Waypoint[] {
+export function dockingApproach(dock: Placed, stopShort: number): Waypoint[] {
   const outwardDirection = outward(dock);
   const tangentDirection = tangent(dock);
   const axisFar = offsetPoint(dock, outwardDirection, TRUCK_LENGTH / 2 + 26);
@@ -72,28 +75,68 @@ function dockingApproach(dock: Placed, stopShort: number): Waypoint[] {
 
 const gateOf = (layout: LayoutIndex) => layout.locations.find((location) => location.type === 'GATE_LANE');
 
-/** Xe đang tới (SCHEDULED, ETA ≤ 8 phút): chạy trên đường ngoài theo lanes.entry, tỉ lệ theo ETA. */
+/** Xe đang tới (SCHEDULED, ETA ≤ 8 phút) khi site không có mạng đường chung: chạy trên lanes.entry, tỉ lệ theo ETA. */
 export const EN_ROUTE_WINDOW_MIN = 8;
+/** Tốc độ hiển thị của xe đang tới trên mạng đường chung (m/s): vị trí = quãng còn lại tới cổng theo ETA. */
+export const EN_ROUTE_SPEED = 4.5;
 
-export function truckTarget(truck: SnapshotTruck, layout: LayoutIndex, waitingIndex: number, nowMs: number): TruckTarget {
+const toWaypoints = (points: Point[]) => points.map((point) => waypoint(point.x, point.z));
+
+/**
+ * `approach` (nếu có): lộ trình đầy đủ từ ngoài bản đồ theo đại lộ tới cổng (tọa độ cục bộ, điểm cuối ở trong cổng).
+ * Xe đang tới nằm trên lộ trình này theo ETA; đổi trạng thái thì chạy nốt phần còn lại thay vì cắt ngang.
+ */
+export function truckTarget(truck: SnapshotTruck, layout: LayoutIndex, waitingIndex: number, nowMs: number, approach?: Point[]): TruckTarget {
   const hidden: TruckTarget = { key: 'hidden', x: 0, z: 0, rotY: 0, visible: false, plan: () => [] };
   const dock = truck.dockLocationId ? layout.byLocation.get(truck.dockLocationId) : undefined;
   const confirmed = truck.position?.locationId ? layout.byLocation.get(truck.position.locationId) : undefined;
   const entry = layout.lanes?.entry ?? [];
   const gate = gateOf(layout);
-  const viaEntry = (from: { x: number; z: number }) => {
+  const hasApproach = !!approach && approach.length >= 2;
+  /** Phần lộ trình ở ngoài cổng (bỏ điểm cuối nằm trong cổng). */
+  const outside = hasApproach ? approach!.slice(0, -1) : [];
+  const viaEntry = (from: { x: number; z: number }, stopAtGate = false): Waypoint[] => {
+    if (hasApproach) {
+      // Xe còn trên đường ngoài cổng → đi nốt lộ trình (tới cổng, hoặc qua cổng vào trong)
+      const projection = projectOntoPolyline(outside, from);
+      const total = polylineLength(approach!);
+      const endDistance = stopAtGate && gate ? projectOntoPolyline(approach!, gate).travelled : total;
+      if (projection.gap > 4 || endDistance - projection.travelled < 1) return [];
+      return toWaypoints(slicePolyline(approach!, projection.travelled, endDistance).slice(1));
+    }
     // Nếu xe còn ở ngoài cổng thì đi nốt lộ trình vào
     if (!gate || entry.length === 0) return [];
     const gatePoint = { x: gate.x, z: gate.z };
     const distGate = Math.hypot(from.x - gatePoint.x, from.z - gatePoint.z);
-    const outside = Math.hypot(from.x - entry[0][0], from.z - entry[0][1]) < Math.hypot(entry[0][0] - gatePoint.x, entry[0][1] - gatePoint.z) + 2 && distGate > 6;
-    if (!outside) return [];
+    const isOutside = Math.hypot(from.x - entry[0][0], from.z - entry[0][1]) < Math.hypot(entry[0][0] - gatePoint.x, entry[0][1] - gatePoint.z) + 2 && distGate > 6;
+    if (!isOutside) return [];
     const nearest = entry.reduce((best, point, pointIndex) => (Math.hypot(point[0] - from.x, point[1] - from.z) < Math.hypot(entry[best][0] - from.x, entry[best][1] - from.z) ? pointIndex : best), 0);
     return entry.slice(nearest + 1).map(([x, z]) => waypoint(x, z));
   };
 
   switch (truck.status) {
     case 'SCHEDULED': {
+      if (hasApproach) {
+        if (!truck.etaAt) return hidden;
+        const outsideLength = polylineLength(outside);
+        // Quãng còn lại tới cổng theo ETA; xa hơn cả lộ trình = xe chưa vào bản đồ
+        const remaining = Math.max(4, ((new Date(truck.etaAt).getTime() - nowMs) / 1000) * EN_ROUTE_SPEED);
+        if (remaining > outsideLength) return hidden;
+        const travelled = outsideLength - remaining;
+        const position = pointAtDistance(outside, travelled);
+        return {
+          key: `enroute:${Math.round(travelled)}`,
+          x: position.x,
+          z: position.z,
+          rotY: position.heading,
+          visible: true,
+          plan: (from) => {
+            const projection = projectOntoPolyline(outside, from);
+            if (projection.gap > 6 || projection.travelled >= travelled) return [waypoint(position.x, position.z)];
+            return toWaypoints(slicePolyline(outside, projection.travelled, travelled).slice(1));
+          },
+        };
+      }
       if (!truck.etaAt || entry.length < 2) return hidden;
       const etaMin = (new Date(truck.etaAt).getTime() - nowMs) / 60_000;
       if (etaMin > EN_ROUTE_WINDOW_MIN) return hidden;
@@ -104,7 +147,8 @@ export function truckTarget(truck: SnapshotTruck, layout: LayoutIndex, waitingIn
     case 'AT_GATE': {
       if (!gate) return hidden;
       const inward = entry.length >= 2 ? Math.atan2(entry[entry.length - 1][0] - entry[entry.length - 2][0], entry[entry.length - 1][1] - entry[entry.length - 2][1]) : Math.PI;
-      return { key: 'gate', x: gate.x, z: gate.z, rotY: inward, visible: true, plan: (from) => [...viaEntry(from), waypoint(gate.x, gate.z)] };
+      const gateHeading = hasApproach ? pointAtDistance(approach!, projectOntoPolyline(approach!, gate).travelled).heading : inward;
+      return { key: 'gate', x: gate.x, z: gate.z, rotY: gateHeading, visible: true, plan: (from) => [...viaEntry(from, true), waypoint(gate.x, gate.z)] };
     }
     case 'DOCK_ASSIGNED': {
       if (!dock) break;
@@ -138,11 +182,29 @@ export function truckTarget(truck: SnapshotTruck, layout: LayoutIndex, waitingIn
   return hidden;
 }
 
-/** Lộ trình rời site của xe vừa EXITED: chạy thẳng ra khỏi dock rồi theo lanes.exit. */
-export function exitPlan(from: { x: number; z: number; rotY: number }, layout: LayoutIndex): Waypoint[] {
-  const forwardDirection = { x: Math.sin(from.rotY), z: Math.cos(from.rotY) };
-  const out = offsetPoint(from, forwardDirection, 18);
-  return [waypoint(out.x, out.z), ...(layout.lanes?.exit ?? []).map(([x, z]) => waypoint(x, z))];
+/**
+ * Lộ trình rời site của xe vừa EXITED. Xe đang ở dock: tiến thẳng ra khỏi bay rồi theo `departure`
+ * (lối ra → đại lộ → site khác / ra khỏi bản đồ). Xe chưa qua cổng (bị từ chối / hủy): quay đầu theo đường tới.
+ */
+export function exitPlan(from: { x: number; z: number; rotY: number }, layout: LayoutIndex, options: { departure?: Point[]; approach?: Point[]; leftFrom?: string } = {}): Waypoint[] {
+  const { departure, approach, leftFrom } = options;
+  if ((leftFrom === 'AT_GATE' || leftFrom === 'SCHEDULED') && approach && approach.length >= 2) {
+    const projection = projectOntoPolyline(approach, from);
+    return toWaypoints(slicePolyline(approach, 0, projection.travelled).reverse().slice(1));
+  }
+  const lane = departure && departure.length >= 2 ? departure : (layout.lanes?.exit ?? []).map(([x, z]) => ({ x, z }));
+  const atDock = !leftFrom || ['AT_DOCK', 'HANDLING', 'READY_TO_LEAVE'].includes(leftFrom);
+  const lead: Waypoint[] = [];
+  if (atDock) {
+    const forwardDirection = { x: Math.sin(from.rotY), z: Math.cos(from.rotY) };
+    const out = offsetPoint(from, forwardDirection, 18);
+    lead.push(waypoint(out.x, out.z));
+  }
+  // Nhập vào lối ra ở điểm gần nhất phía trước (không quay lại đầu lối nếu đã đi quá)
+  const joinFrom = lead[lead.length - 1] ?? from;
+  const projection = lane.length >= 2 ? projectOntoPolyline(lane, joinFrom) : null;
+  const rest = projection ? slicePolyline(lane, projection.travelled, polylineLength(lane)) : lane;
+  return [...lead, ...toWaypoints(rest)];
 }
 
 /** Điểm trước dock nơi xe nâng lấy/đặt pallet (sau đuôi xe, lệch sang bên). */

@@ -1,13 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { LoginRequest } from '@waretrack/shared-schemas';
-import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Navigate } from 'react-router';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
-import { api, describeError } from '@/lib/api';
+import { describeError } from '@/lib/api';
+import { useRunInfo } from '@/lib/queries';
 import { useAuth } from '@/stores/auth';
 
 const DEMO_USERS = ['manager', 'dispatcher', 'gate', 'supervisor', 'operator', 'forklift', 'inventory', 'viewer', 'admin'];
@@ -19,7 +19,7 @@ export function LoginPage() {
   const login = useAuth((state) => state.login);
   const [error, setError] = useState<string | null>(null);
   // Tài khoản mẫu chỉ hiện ở bản demo; vận hành thật không gợi ý username
-  const { data: runInfo } = useQuery({ queryKey: ['health', 'info'], queryFn: () => api<{ mode: 'demo' | 'live' }>('/health/info'), staleTime: Infinity });
+  const { data: runInfo } = useRunInfo();
   const demoMode = runInfo?.mode === 'demo';
   const form = useForm<LoginRequest>({ resolver: zodResolver(LoginRequest), defaultValues: { username: '', password: '' } });
 
