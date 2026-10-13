@@ -14,15 +14,21 @@ on:
       - "apps/api/**"
       - "packages/shared-schemas/**"
       - "pnpm-lock.yaml"
+      - "render.yaml"
+      - ".github/workflows/api.yml"
   workflow_dispatch:
 
 concurrency:
   group: api-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16.4-alpine
@@ -41,9 +47,11 @@ jobs:
       # Seed thêm bãi xe WH-06 cho test vehicle storage; DemoDirector không bật trong CI (dữ liệu test cố định)
       SEED_VEHICLE_YARD: "true"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: pnpm
@@ -69,6 +77,7 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: api-production
     steps:
       # Render build lại từ Dockerfile của commit này (render.yaml: autoDeploy false)
