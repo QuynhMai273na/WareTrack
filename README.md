@@ -25,7 +25,7 @@ Mỗi workflow có path filter: sửa web chỉ chạy CI/deploy web, sửa API 
 
 ## Chạy local
 
-Yêu cầu: Node ≥ 20.19, Docker, pnpm 9 — bật một lần bằng `corepack enable` (hoặc `npm i -g pnpm@9`). Các script gốc gọi `pnpm` lồng nhau nên cần lệnh `pnpm` có trên PATH.
+Yêu cầu: Node ≥ 24 (LTS), Docker, pnpm 9 — bật một lần bằng `corepack enable` (hoặc `npm i -g pnpm@9`). Các script gốc gọi `pnpm` lồng nhau nên cần lệnh `pnpm` có trên PATH.
 
 ```bash
 pnpm install

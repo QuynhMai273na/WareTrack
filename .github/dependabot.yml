@@ -7,6 +7,10 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # Bản major (TypeScript 7, Prisma 7, Vite 8…) cần sửa code → nâng chủ động từng PR, không gom tự động
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       dev-dependencies:
         dependency-type: development
@@ -24,3 +28,7 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # Chỉ nâng trong cùng dòng Node LTS (vd 24.x); đổi major Node làm bằng PR riêng cùng CI
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
