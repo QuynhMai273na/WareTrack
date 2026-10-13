@@ -31,9 +31,11 @@ services:
         value: "true"
       - key: SEED_ON_EMPTY
         value: "true"
-      # Dựng và chạy kịch bản xe/xe nâng giống video demo (DemoDirector, DEC-51)
+      # Dựng cảnh demo giống video (DemoDirector, DEC-51) rồi chờ người dùng thao tác: xe tải / xe nâng chỉ chạy
+      # khi có người bấm (cổng, dock, xếp/dỡ). "true" = xe tự chạy liên tục; "false" = tắt hẳn.
+      # Đặt ở đây (không sửa tay trên dashboard) vì Blueprint auto-sync sẽ ghi đè giá trị sửa tay.
       - key: DEMO_DIRECTOR
-        value: "true"
+        value: "scene"
       # ── Vận hành thật (DEC-62): đổi SEED_ON_EMPTY và DEMO_DIRECTOR thành "false", rồi bỏ comment hai secret dưới
       #    để API tạo admin đầu tiên khi database chưa có user.
       # - key: BOOTSTRAP_ADMIN_USERNAME

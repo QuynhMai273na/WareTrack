@@ -72,7 +72,7 @@ Quy trình đưa một kho thật vào hệ thống (đăng nhập bằng admin 
 - `WEB_ORIGIN`: URL web trên Vercel (ví dụ `https://waretrack.vercel.app`)
 - `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`: sinh bằng `node apps/api/scripts/gen-jwt-keys.mjs`
 
-Container tự chạy `prisma migrate deploy` và seed dữ liệu demo khi database trống. **Vận hành thật:** đặt `SEED_ON_EMPTY=false`, `DEMO_DIRECTOR=false` và thêm `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` (secret) trước lần deploy đầu tiên. Tạo Deploy Hook trên Render rồi lưu vào secret GitHub `RENDER_DEPLOY_HOOK_URL`: workflow `api.yml` gọi hook này sau khi CI xanh trên `main`.
+Container tự chạy `prisma migrate deploy` và seed dữ liệu demo khi database trống; demo ở chế độ thao tác tay (`DEMO_DIRECTOR=scene` trong `render.yaml` — đổi giá trị trong file, không sửa tay trên Render vì Blueprint đồng bộ lại). **Vận hành thật:** đặt `SEED_ON_EMPTY=false`, `DEMO_DIRECTOR=false` và thêm `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` (secret) trước lần deploy đầu tiên. Tạo Deploy Hook trên Render rồi lưu vào secret GitHub `RENDER_DEPLOY_HOOK_URL`: workflow `api.yml` gọi hook này sau khi CI xanh trên `main`.
 
 **Web → Vercel.** Tạo project từ repo với Root Directory = `apps/web` (build theo [`apps/web/vercel.json`](apps/web/vercel.json)), đặt biến môi trường:
 
