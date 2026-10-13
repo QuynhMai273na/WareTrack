@@ -1,6 +1,7 @@
 # WareTrack API — image cho Render (DEC-58). Build context = gốc monorepo:
 #   docker build -f apps/api/Dockerfile -t waretrack-api .
-FROM node:20.19-bookworm-slim
+# Node 24 LTS (Krypton). Node 25+ không còn kèm Corepack — đổi major thì kiểm tra bước `corepack enable`
+FROM node:24.21-bookworm-slim
 
 # Prisma engine cần OpenSSL
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
