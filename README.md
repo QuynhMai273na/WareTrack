@@ -64,10 +64,11 @@ Quy trình đưa một kho thật vào hệ thống (đăng nhập bằng admin 
 | `pnpm --filter @waretrack/api test:smoke` | 6 bộ smoke test trên API + DB thật (yard, inventory, xe lưu bãi, thiết bị + thông báo, realtime, thiết lập site / vận hành thật); tự seed lại trước mỗi bộ. Cần API đang chạy với `DEMO_DIRECTOR=false` và `SEED_VEHICLE_YARD=true` |
 | `pnpm --filter @waretrack/web e2e` | Playwright e2e (tự bật Vite dev server; cần API đang chạy với dữ liệu seed) |
 
-## Deploy demo (DEC-52, DEC-58 — chi tiết mục 12.7)
+## Deploy demo (DEC-52, DEC-58, DEC-67 — chi tiết mục 12.7)
 
-**API → Render.** Render Dashboard → New → Blueprint → chọn repo; [`render.yaml`](render.yaml) tạo PostgreSQL 16 và web service Docker ([`apps/api/Dockerfile`](apps/api/Dockerfile)). Nhập các secret:
+**API → Render.** Render Dashboard → New → Blueprint → chọn repo; [`render.yaml`](render.yaml) tạo web service Docker ([`apps/api/Dockerfile`](apps/api/Dockerfile)) ở vùng Singapore. PostgreSQL 16 đặt trên **Neon** (DEC-67): tạo project vùng Singapore, tắt *Connection pooling*, copy chuỗi kết nối trực tiếp. Nhập các secret:
 
+- `DATABASE_URL`: chuỗi kết nối trực tiếp của Neon (có `?sslmode=require`)
 - `WEB_ORIGIN`: URL web trên Vercel (ví dụ `https://waretrack.vercel.app`)
 - `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY`: sinh bằng `node apps/api/scripts/gen-jwt-keys.mjs`
 
@@ -78,6 +79,6 @@ Container tự chạy `prisma migrate deploy` và seed dữ liệu demo khi data
 - `VITE_API_BASE_URL=https://<api>.onrender.com/api/v1`
 - `VITE_WS_URL=https://<api>.onrender.com`
 
-Để GitHub Actions deploy, thêm secret `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`. Nếu dùng Git integration của Vercel thì có thể bỏ bước deploy trong `web.yml`.
+Sau lần deploy đầu, ngắt Git integration của Vercel (Settings → Git → Disconnect) để web chỉ lên production qua CI (test xanh + duyệt). Thêm secret `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` vào environment `web-production` và `RENDER_DEPLOY_HOOK_URL` vào `api-production` trên GitHub.
 
-**Lưu ý gói free:** API trên Render ngủ sau khoảng 15 phút không có request, lần mở đầu mất khoảng 1 phút; Render Postgres free hết hạn sau 30 ngày.
+**Lưu ý gói free:** API trên Render ngủ sau khoảng 15 phút không có request, lần mở đầu mất khoảng 1 phút. Database Neon free không hết hạn nhưng dung lượng nhỏ và tự ngủ khi không dùng (thức dậy trong vài trăm mili giây).

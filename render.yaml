@@ -1,17 +1,11 @@
-# Render Blueprint — WareTrack API + PostgreSQL (DEC-58). Web chạy trên Vercel (DEC-52).
+# Render Blueprint — WareTrack API (DEC-58). PostgreSQL trên Neon (DEC-67), web trên Vercel (DEC-52).
 # Dùng: Render Dashboard → New → Blueprint → chọn repo này. Secret (sync: false) nhập trên dashboard.
-databases:
-  - name: waretrack-db
-    databaseName: waretrack
-    user: waretrack
-    plan: free # Free Postgres của Render hết hạn sau 30 ngày — đổi plan khi dùng thật
-    postgresMajorVersion: "16"
-
 services:
   - type: web
     name: waretrack-api
     runtime: docker
     plan: free # Free instance ngủ sau ~15 phút không có request; lần gọi đầu mất ~1 phút để dậy
+    region: singapore # cùng vùng với database Neon (ap-southeast-1) để truy vấn không đi vòng qua Mỹ
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: .
     healthCheckPath: /api/v1/health/ready
@@ -19,10 +13,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Chuỗi kết nối TRỰC TIẾP của Neon (tắt "Connection pooling"; có ?sslmode=require) — Prisma migrate cần kết nối trực tiếp
       - key: DATABASE_URL
-        fromDatabase:
-          name: waretrack-db
-          property: connectionString
+        sync: false
       # Origin của web trên Vercel, ví dụ https://waretrack.vercel.app (nhiều origin cách nhau bằng dấu phẩy)
       - key: WEB_ORIGIN
         sync: false

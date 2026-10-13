@@ -39,6 +39,6 @@ Chi tiết và lý do xem [Decision Log](WareTrack_Requirements_Architecture_v1.
 | DEC-07 | Định danh | UUIDv7 cho ID nội bộ; mã nghiệp vụ dễ đọc riêng (`WH-01`, `PAL-1026`, …) |
 | DEC-36, DEC-53 | Authentication | JWT với tài khoản nội bộ; OIDC để sau (hiện không có IdP doanh nghiệp) |
 | DEC-47 | i18n | Tiếng Việt mặc định, tiếng Anh thứ hai |
-| DEC-52, DEC-58 | Deployment giai đoạn demo | Web (`apps/web`) → **Vercel**. API (`apps/api`) → **Render** (web service Docker từ `apps/api/Dockerfile`, `render.yaml`) + Render PostgreSQL 16 — vì cần process Node chạy liên tục cho Socket.IO, outbox relay, scheduler (Vercel Functions không phù hợp). "Docker + Nginx + Linux" ở bảng trên vẫn là kiến trúc đích cho production |
+| DEC-52, DEC-58 | Deployment giai đoạn demo | Web (`apps/web`) → **Vercel**. API (`apps/api`) → **Render** (web service Docker từ `apps/api/Dockerfile`, `render.yaml`) + PostgreSQL 16 trên **Neon** (DEC-67) — vì cần process Node chạy liên tục cho Socket.IO, outbox relay, scheduler (Vercel Functions không phù hợp). "Docker + Nginx + Linux" ở bảng trên vẫn là kiến trúc đích cho production |
 | DEC-54 | Quét mã | Camera trình duyệt (Barcode Detection API, fallback ZXing) + nhập tay; tương thích máy quét HID |
 | DEC-56 | 3D asset | Layout tự thiết kế; giai đoạn đầu geometry thủ tục trong code, asset Blender low-poly (GLB) sau |
