@@ -10,6 +10,7 @@ if (users > 0) {
   console.log(`[seed] Database already has ${users} users — skipping demo seed`);
 } else {
   console.log('[seed] Empty database — seeding demo data');
-  const r = spawnSync('npx', ['tsx', 'prisma/seed/index.ts'], { stdio: 'inherit' });
-  if (r.status !== 0) process.exit(r.status ?? 1);
+  // Chạy seed TypeScript qua tsx bằng chính tiến trình node (image runtime không có npx)
+  const seed = spawnSync(process.execPath, ['--import', 'tsx', 'prisma/seed/index.ts'], { stdio: 'inherit' });
+  if (seed.status !== 0) process.exit(seed.status ?? 1);
 }
