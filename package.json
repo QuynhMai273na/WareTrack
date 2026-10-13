@@ -16,5 +16,10 @@
     "db:migrate": "pnpm --filter @waretrack/api prisma:migrate",
     "db:seed": "pnpm --filter @waretrack/api prisma:seed",
     "db:reset": "pnpm --filter @waretrack/api prisma:reset"
+  },
+  "pnpm": {
+    "overrides": {
+      "deepmerge-ts": "^8.0.2"
+    }
   }
 }

@@ -14,6 +14,8 @@ on:
       - "apps/api/**"
       - "packages/shared-schemas/**"
       - "pnpm-lock.yaml"
+      - "render.yaml"
+      - ".github/workflows/api.yml"
   workflow_dispatch:
 
 concurrency:
