@@ -2,14 +2,18 @@
 # Dùng: Render Dashboard → New → Blueprint → chọn repo này. Secret (sync: false) nhập trên dashboard.
 services:
   - type: web
-    name: waretrack-api
-    runtime: docker
+    # Service chạy image CI đã build, test, quét và ký (DEC-68) — Render không tự build từ Dockerfile.
+    # Kiểu service (build từ repo ↔ image có sẵn) không đổi được tại chỗ, nên đây là service mới.
+    name: waretrack-api-image
+    runtime: image
+    image:
+      # Package GHCR để Public (repo public, image không chứa bí mật). Deploy hook của CI truyền digest cụ thể;
+      # tag latest chỉ dùng cho lần tạo service đầu tiên.
+      url: ghcr.io/quynhmai273na/waretrack-api:latest
     plan: free # Free instance ngủ sau ~15 phút không có request; lần gọi đầu mất ~1 phút để dậy
     region: singapore # cùng vùng với database Neon (ap-southeast-1) để truy vấn không đi vòng qua Mỹ
-    dockerfilePath: ./apps/api/Dockerfile
-    dockerContext: .
     healthCheckPath: /api/v1/health/ready
-    autoDeploy: false # deploy do GitHub Actions gọi deploy hook sau khi CI xanh (.github/workflows/api.yml)
+    autoDeploy: false # deploy do GitHub Actions gọi deploy hook (kèm digest đã ký) sau khi CI xanh và được duyệt
     envVars:
       - key: NODE_ENV
         value: production
