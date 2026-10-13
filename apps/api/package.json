@@ -29,7 +29,7 @@
     "@nestjs/websockets": "^11.0.5",
     "@prisma/client": "^6.2.1",
     "@waretrack/shared-schemas": "workspace:*",
-    "argon2": "^0.41.1",
+    "argon2": "^0.45.1",
     "cookie-parser": "^1.4.7",
     "helmet": "^8.0.0",
     "nestjs-zod": "^5.5.0",
