@@ -1,7 +1,7 @@
 import { Html, RoundedBox } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { SiteSnapshot, SnapshotTruck } from '@waretrack/shared-schemas';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRunInfo } from '@/lib/queries';
 import { useScene, type SelectableType } from '@/stores/scene';
@@ -12,7 +12,10 @@ import { CarModel, ForkliftModel, MapPin, PalletModel, TruckModel } from './mode
 import { dockingApproach, EN_ROUTE_SPEED, exitPlan, forkliftDockSpots, truckTarget, type TruckTarget, type Waypoint } from './motion';
 import { polylineLength, projectOntoPolyline, type SiteRoutes, slicePolyline } from './network';
 import { PathFollower, ShuttleMover } from './Movers';
-import { objectKey, registerObject, takePose } from './registry';
+import { canCarry, doorEnd, forkliftObstacles, type JobEnd, type PalletJob, slotEnd, truckEnd } from './forkliftJobs';
+import { ForkliftDriver } from './ForkliftDriver';
+import { type DisplayedPallet, palletColor, type PalletPose, useStablePalletSlots } from './palletLayout';
+import { getObject, objectKey, registerObject, takePose } from './registry';
 
 function useSelectHandlers(siteId: string, type: SelectableType, id: string) {
   const select = useScene((state) => state.select);
@@ -191,72 +194,40 @@ function DockingMarker({ dock, from }: { dock: Placed; from: { x: number; z: num
   );
 }
 
-/** Pallet theo vị trí: ô sàn xếp lưới 2 cột, rack theo tầng/khoang, dock xếp cạnh đuôi xe. */
-function palletSlotOffset(placed: Placed, slotIndex: number): { x: number; y: number; z: number; scale: number } {
-  const rot = (lx: number, lz: number) => ({ x: placed.x + lx * Math.cos(placed.rotY) + lz * Math.sin(placed.rotY), z: placed.z - lx * Math.sin(placed.rotY) + lz * Math.cos(placed.rotY) });
-  if (placed.display === 'rack') {
-    const perLevel = placed.bays;
-    const level = Math.floor(slotIndex / perLevel) % placed.levels;
-    const bay = slotIndex % perLevel;
-    const bw = placed.sx / placed.bays;
-    const slotPosition = rot(-placed.sx / 2 + bw * (bay + 0.5), 0);
-    return { x: slotPosition.x, y: 0.2 + level * 1.5, z: slotPosition.z, scale: 1 };
-  }
-  if (placed.type === 'DOCK') {
-    const outwardDirection = outward(placed);
-    const tangentDirection = tangent(placed);
-    const side = slotIndex % 2 === 0 ? 1 : -1;
-    const stackRow = Math.floor(slotIndex / 2);
-    return { x: placed.x + outwardDirection.x * (2.2 + stackRow * 1.7) + tangentDirection.x * side * 4.2, y: 0, z: placed.z + outwardDirection.z * (2.2 + stackRow * 1.7) + tangentDirection.z * side * 4.2, scale: 1.3 };
-  }
-  const cols = placed.sx > 4 ? 3 : 2;
-  const col = slotIndex % cols;
-  const rowN = Math.floor(slotIndex / cols);
-  const slotPosition = rot((col - (cols - 1) / 2) * 1.5, (rowN - 0) * 1.4 - 0.3);
-  return { x: slotPosition.x, y: 0, z: slotPosition.z, scale: 1.3 };
-}
+/** Cách vẽ pallet đang có chuyến chở: chờ ở chỗ cũ (chưa xúc) hoặc ẩn (đang trên càng / còn trong xe, trong kho). */
+type PalletOverride = { mode: 'waiting'; pose: PalletPose } | { mode: 'hidden' };
 
-const Pallets = memo(function Pallets({ siteId, pallets, layout, selectedId }: { siteId: string; pallets: SiteSnapshot['pallets']; layout: LayoutIndex; selectedId: string | null }) {
-  const grouped = useMemo(() => {
-    const palletsByLocation = new Map<string, SiteSnapshot['pallets']>();
-    for (const pallet of pallets) {
-      const loc = pallet.position?.locationId;
-      if (!loc || !layout.byLocation.has(loc)) continue;
-      const list = palletsByLocation.get(loc) ?? [];
-      list.push(pallet);
-      palletsByLocation.set(loc, list);
-    }
-    return palletsByLocation;
-  }, [pallets, layout]);
+const Pallets = memo(function Pallets({ siteId, displayed, overrides, pallets, selectedId }: { siteId: string; displayed: Map<string, DisplayedPallet>; overrides: Map<string, PalletOverride>; pallets: SiteSnapshot['pallets']; selectedId: string | null }) {
+  const byId = useMemo(() => new Map(pallets.map((pallet) => [pallet.id, pallet])), [pallets]);
+  const items: Array<{ pallet: SiteSnapshot['pallets'][number]; pose: PalletPose; visible: boolean }> = [];
+  for (const [palletId, override] of overrides) {
+    const pallet = byId.get(palletId);
+    if (pallet && override.mode === 'waiting') items.push({ pallet, pose: override.pose, visible: true });
+  }
+  for (const [palletId, entry] of displayed) {
+    const override = overrides.get(palletId);
+    // Pallet đang có chuyến: ẩn ở chỗ mới cho tới khi xe nâng đặt xuống (giữ component để không nháy)
+    if (override?.mode === 'waiting') continue;
+    items.push({ pallet: entry.pallet, pose: entry.pose, visible: !override });
+  }
   return (
     <group>
-      {[...grouped.entries()].flatMap(([locId, list]) => {
-        const placed = layout.byLocation.get(locId)!;
-        if (!['STAGING', 'STORAGE', 'DOCK', 'QUARANTINE', 'YARD_SLOT'].includes(placed.type)) return [];
-        return list
-          .slice()
-          .sort((firstPallet, secondPallet) => firstPallet.code.localeCompare(secondPallet.code))
-          .slice(0, placed.type === 'DOCK' ? 6 : 12)
-          .map((pallet, slotIndex) => {
-            const slotOffset = palletSlotOffset(placed, slotIndex);
-            return <PalletItem key={pallet.id} siteId={siteId} pallet={pallet} x={slotOffset.x} y={slotOffset.y} z={slotOffset.z} scale={slotOffset.scale} rotY={placed.rotY} selected={selectedId === pallet.id} />;
-          });
-      })}
+      {items.map(({ pallet, pose, visible }) => (
+        <PalletItem key={pallet.id} siteId={siteId} pallet={pallet} pose={pose} visible={visible} selected={selectedId === pallet.id} />
+      ))}
     </group>
   );
 });
 
-const BLUE_SKUS = ['glove', 'container'];
-function PalletItem({ siteId, pallet, x, y, z, scale, rotY, selected }: { siteId: string; pallet: SiteSnapshot['pallets'][number]; x: number; y: number; z: number; scale: number; rotY: number; selected: boolean }) {
+function PalletItem({ siteId, pallet, pose, visible, selected }: { siteId: string; pallet: SiteSnapshot['pallets'][number]; pose: PalletPose; visible: boolean; selected: boolean }) {
   const handlers = useSelectHandlers(siteId, 'pallet', pallet.id);
-  const label = pallet.label.toLowerCase();
-  const color = pallet.stockStatus === 'QUARANTINE' || pallet.stockStatus === 'DAMAGED' ? '#ef8a8a' : BLUE_SKUS.some((skuKeyword) => label.includes(skuKeyword)) ? '#3b6fe0' : label.includes('peas') || label.includes('berries') || label.includes('water') || label.includes('juice') ? '#eef2f8' : '#d9a86c';
+  // Pallet không tự trượt: đứng đúng ô; mọi di chuyển do xe nâng chở (ForkliftDriver)
   return (
-    <Animated objectKey={objectKey('pallet', pallet.id)} x={x} z={z} rotY={rotY} speed={4}>
-      <group position={[0, y, 0]} {...handlers}>
-        <PalletModel boxColor={color} tiers={y > 1 ? 1 : 2} scale={scale} />
+    <Animated objectKey={objectKey('pallet', pallet.id)} x={pose.x} z={pose.z} rotY={pose.rotY} snap visible={visible}>
+      <group position={[0, pose.y, 0]} {...handlers}>
+        <PalletModel boxColor={palletColor(pallet)} tiers={pose.y > 1 ? 1 : 2} scale={pose.scale} />
       </group>
-      {selected ? <SceneLabel y={y + 2.4 * scale} text={pallet.code} sub={pallet.label} selected /> : null}
+      {selected ? <SceneLabel y={pose.y + 2.4 * pose.scale} text={pallet.code} sub={pallet.label} selected /> : null}
     </Animated>
   );
 }
@@ -311,32 +282,96 @@ function nearestStaging(layout: LayoutIndex, from: { x: number; z: number }, pal
   return list.reduce<Placed | undefined>((best, location) => (!best || Math.hypot(location.x - from.x, location.z - from.z) < Math.hypot(best.x - from.x, best.z - from.z) ? location : best), undefined);
 }
 
-const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pallets, shipments, autoplay, index, selected, hovered }: { siteId: string; forklift: SiteSnapshot['forklifts'][number]; layout: LayoutIndex; trucks: SnapshotTruck[]; pallets: SiteSnapshot['pallets']; shipments: SiteSnapshot['activeShipments']; autoplay: boolean; index: number; selected: boolean; hovered: boolean }) {
+/** Dock xe nâng đang làm (theo task summary) — kèm cờ có xe tải đỗ ở đó không. */
+function workingDock(forklift: SiteSnapshot['forklifts'][number], layout: LayoutIndex, trucks: SnapshotTruck[]) {
+  const busy = forklift.status === 'BUSY' || forklift.status === 'ASSIGNED';
+  const dock = busy ? dockFromSummary(forklift.taskSummary, layout, trucks) : undefined;
+  return { dock, truckAtDock: dock ? trucks.some((truck) => truck.dockLocationId === dock.id) : false };
+}
+
+/** Chỗ đỗ khi rảnh: cạnh dock đang làm (có xe tải) hoặc trước trạm sạc / trong trạm khi đang sạc. */
+function forkliftHome(forklift: SiteSnapshot['forklifts'][number], layout: LayoutIndex, trucks: SnapshotTruck[]) {
+  const { dock, truckAtDock } = workingDock(forklift, layout, trucks);
+  if (dock && truckAtDock) {
+    const spots = forkliftDockSpots(dock);
+    return { x: spots.beside.x, z: spots.beside.z, rotY: Math.atan2(spots.atTruck.x - spots.beside.x, spots.atTruck.z - spots.beside.z) };
+  }
+  const charger = forklift.position?.locationId ? layout.byLocation.get(forklift.position.locationId) : layout.locations.find((location) => location.type === 'CHARGER');
+  if (!charger) return null;
+  const outwardDirection = outward(charger);
+  const parkDistance = forklift.status === 'CHARGING' ? 0.4 : 3.2;
+  return { x: charger.x + outwardDirection.x * parkDistance, z: charger.z + outwardDirection.z * parkDistance, rotY: charger.rotY + Math.PI };
+}
+
+const Forklift = memo(function Forklift({
+  siteId,
+  forklift,
+  layout,
+  trucks,
+  pallets,
+  autoplay,
+  index,
+  selected,
+  hovered,
+  driving,
+  job,
+  obstacles,
+  onPickup,
+  onDrop,
+  onHome,
+}: {
+  siteId: string;
+  forklift: SiteSnapshot['forklifts'][number];
+  layout: LayoutIndex;
+  trucks: SnapshotTruck[];
+  pallets: SiteSnapshot['pallets'];
+  autoplay: boolean;
+  index: number;
+  selected: boolean;
+  hovered: boolean;
+  driving: boolean;
+  job: PalletJob | null;
+  obstacles: ReturnType<typeof forkliftObstacles>;
+  onPickup: (jobId: string) => void;
+  onDrop: (jobId: string) => void;
+  onHome: (forkliftId: string) => void;
+}) {
   const handlers = useSelectHandlers(siteId, 'forklift', forklift.id);
   const dim = forklift.status === 'OFFLINE' || forklift.status === 'MAINTENANCE';
   const busy = forklift.status === 'BUSY' || forklift.status === 'ASSIGNED';
-  const summaryDock = busy ? dockFromSummary(forklift.taskSummary, layout, trucks) : undefined;
-  const dockTruck = summaryDock ? trucks.find((truck) => truck.dockLocationId === summaryDock.id) : undefined;
-  // Thủ công: chỉ đứng làm việc ở dock khi thật sự có xe tải đỗ ở đó (xe đã đi thì về trạm sạc)
-  const dock = autoplay || dockTruck ? summaryDock : undefined;
-  // Số pallet đã xếp/nhận của lô hàng gắn với xe tải ở dock — tăng lên là xe nâng chạy một chuyến
-  const tripCount = dockTruck ? (shipments.find((shipment) => shipment.visitId === dockTruck.visitId)?.progress.done ?? 0) : 0;
-  const label = selected || hovered ? <SceneLabel y={4.2} text={forklift.code} sub={busy ? (forklift.taskSummary?.startsWith('Unloading') ? 'Unloading truck' : 'Loading truck') : forklift.status === 'CHARGING' ? 'Charging' : 'Idle'} selected={selected} /> : null;
-  if (dock) {
+  const key = objectKey('forklift', forklift.id);
+  const statusText = job ? 'Moving pallet' : busy ? (forklift.taskSummary?.startsWith('Unloading') ? 'Unloading truck' : 'Loading truck') : forklift.status === 'CHARGING' ? 'Charging' : 'Idle';
+  const label = selected || hovered ? <SceneLabel y={4.2} text={forklift.code} sub={statusText} selected={selected} /> : null;
+  const home = forkliftHome(forklift, layout, trucks);
+  const handleHome = useCallback(() => onHome(forklift.id), [onHome, forklift.id]);
+  if (!home) return null;
+  const model = (
+    <group {...handlers} scale={1.25}>
+      <ForkliftModel dim={dim} carrying={false} />
+    </group>
+  );
+  // Có pallet thật đổi chỗ → chạy chuyến chở (tới khi về lại chỗ đỗ)
+  if (driving) {
+    return (
+      <ForkliftDriver objectKey={key} job={job} home={home} obstacles={obstacles} onPickup={onPickup} onDrop={onDrop} onHome={handleHome}>
+        {model}
+        {label}
+      </ForkliftDriver>
+    );
+  }
+  // DemoDirector tự chạy: xe nâng đang làm ở dock chạy vòng xe tải ↔ staging
+  const { dock } = workingDock(forklift, layout, trucks);
+  if (autoplay && dock) {
     const spots = forkliftDockSpots(dock);
     const stg = nearestStaging(layout, dock, pallets);
     const far = stg ? { x: stg.x + outward(stg).x * 2.2, z: stg.z + outward(stg).z * 2.2 } : { x: dock.x + outward(dock).x * 9 + tangent(dock).x * 8, z: dock.z + outward(dock).z * 9 + tangent(dock).z * 8 };
     const loading = !forklift.taskSummary?.startsWith('Unloading');
-    const shuttleStart = loading ? far : spots.atTruck;
-    const shuttleEnd = loading ? spots.atTruck : far;
     return (
       <ShuttleMover
-        objectKey={objectKey('forklift', forklift.id)}
-        startPoint={shuttleStart}
-        endPoint={shuttleEnd}
+        objectKey={key}
+        startPoint={loading ? far : spots.atTruck}
+        endPoint={loading ? spots.atTruck : far}
         phase={index * 5.3}
-        autoplay={autoplay}
-        tripCount={tripCount}
         render={(carrying) => (
           <group {...handlers} scale={1.25}>
             <ForkliftModel dim={dim} carrying={carrying} />
@@ -346,16 +381,9 @@ const Forklift = memo(function Forklift({ siteId, forklift, layout, trucks, pall
       />
     );
   }
-  // Không có việc: đỗ tại trạm sạc (đang sạc) hoặc ngay trước trạm (chờ việc)
-  const charger = forklift.position?.locationId ? layout.byLocation.get(forklift.position.locationId) : layout.locations.find((location) => location.type === 'CHARGER');
-  if (!charger) return null;
-  const outwardDirection = outward(charger);
-  const parkDistance = forklift.status === 'CHARGING' ? 0.4 : 3.2;
   return (
-    <Animated objectKey={objectKey('forklift', forklift.id)} x={charger.x + outwardDirection.x * parkDistance} z={charger.z + outwardDirection.z * parkDistance} rotY={charger.rotY + Math.PI} speed={3}>
-      <group {...handlers} scale={1.25}>
-        <ForkliftModel dim={dim} carrying={false} />
-      </group>
+    <Animated objectKey={key} x={home.x} z={home.z} rotY={home.rotY} speed={3} continueFromLastPose>
+      {model}
       {label}
     </Animated>
   );
@@ -428,6 +456,137 @@ export function DynamicLayers({ snapshot, layout, routes, transferTargetFor }: {
     if (ghost.destinationSiteId) endTransit(ghost.truck.truckCode);
   };
 
+  // ── Chuyến chở pallet: pallet đổi chỗ → xe nâng chạy tới xúc, chở tới chỗ mới, đặt xuống ──
+  const displayed = useStablePalletSlots(snapshot.pallets, layout);
+  const obstacles = useMemo(() => forkliftObstacles(layout, snapshot.trucks), [layout, snapshot.trucks]);
+  const [jobs, setJobs] = useState<PalletJob[]>([]);
+  const [pickedUp, setPickedUp] = useState<Set<string>>(() => new Set());
+  const [driving, setDriving] = useState<Set<string>>(() => new Set());
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+  const previousPallets = useRef<Map<string, { locationId: string | null; lifecycle: string; displayed?: DisplayedPallet }> | null>(null);
+  useEffect(() => {
+    const previous = previousPallets.current;
+    const snapshotState = new Map(snapshot.pallets.map((pallet) => [pallet.id, { locationId: pallet.position?.locationId ?? null, lifecycle: pallet.lifecycle, displayed: displayed.get(pallet.id) }]));
+    previousPallets.current = snapshotState;
+    if (!previous) return;
+    const dockOf = (locationId: string | null) => {
+      const placed = locationId ? layout.byLocation.get(locationId) : undefined;
+      return placed?.type === 'DOCK' ? placed : undefined;
+    };
+    const truckDocked = (dock: Placed) => snapshot.trucks.some((truck) => (truck.position?.locationId ?? truck.dockLocationId) === dock.id && ['AT_DOCK', 'HANDLING', 'READY_TO_LEAVE'].includes(truck.status));
+    const pending = [...jobsRef.current];
+    const created: PalletJob[] = [];
+    const load = new Map<string, number>();
+    for (const existing of pending) load.set(existing.forkliftId, (load.get(existing.forkliftId) ?? 0) + 1);
+    const carriers = snapshot.forklifts.filter(canCarry);
+    for (const pallet of snapshot.pallets) {
+      const before = previous.get(pallet.id);
+      const current = snapshotState.get(pallet.id)!;
+      const enteredTruck = current.lifecycle === 'LOADED' && !!before && before.lifecycle !== 'LOADED';
+      const leftTruck = before?.lifecycle === 'LOADED' && current.lifecycle !== 'LOADED';
+      const moved = before ? before.locationId !== current.locationId || enteredTruck || leftTruck : false;
+      // Pallet mới xuất hiện ở dock có xe tải = vừa dỡ từ xe xuống
+      const arrivalDock = !before ? dockOf(current.locationId) : undefined;
+      const unloaded = !!current.displayed && !!arrivalDock && truckDocked(arrivalDock);
+      if (!moved && !unloaded) continue;
+      const previousDock = dockOf(before?.locationId ?? null);
+      const currentDock = dockOf(current.locationId);
+      // Chuyến trước của cùng pallet (chưa xong) → nối tiếp từ đích của chuyến đó, cùng xe nâng
+      const chained = [...pending, ...created].filter((existing) => existing.palletId === pallet.id).pop();
+      let from: JobEnd | null = chained ? chained.to : null;
+      if (!from) {
+        if (unloaded && arrivalDock) from = truckEnd(arrivalDock);
+        else if (leftTruck && previousDock) from = truckEnd(previousDock);
+        else if (before?.displayed) from = slotEnd(before.displayed);
+        else from = doorEnd(layout, current.displayed ? current.displayed.pose : (currentDock ?? layout.center), snapshot.trucks);
+      }
+      let to: JobEnd | null;
+      if (enteredTruck && currentDock) to = truckEnd(currentDock);
+      else if (current.displayed) to = slotEnd(current.displayed);
+      else to = doorEnd(layout, from?.point ?? layout.center, snapshot.trucks);
+      if (!from || !to) continue;
+      if (from.kind !== 'slot' && from.kind === to.kind && Math.hypot(from.point.x - to.point.x, from.point.z - to.point.z) < 1) continue;
+      // Giao cho xe nâng ít việc nhất, gần nhất
+      let forkliftId = chained?.forkliftId;
+      if (!forkliftId) {
+        const origin = from.point;
+        const ranked = carriers
+          .filter((candidate) => (load.get(candidate.id) ?? 0) < 5)
+          .map((candidate) => {
+            const shown = getObject(objectKey('forklift', candidate.id));
+            const position = shown ? { x: shown.position.x, z: shown.position.z } : (forkliftHome(candidate, layout, snapshot.trucks) ?? origin);
+            return { candidate, score: (load.get(candidate.id) ?? 0) * 60 + Math.hypot(position.x - origin.x, position.z - origin.z) + (candidate.status === 'CHARGING' ? 40 : 0) };
+          })
+          .sort((first, second) => first.score - second.score);
+        forkliftId = ranked[0]?.candidate.id;
+      }
+      // Không có xe nâng nào nhận được → pallet đứng luôn ở chỗ mới (không tự trượt)
+      if (!forkliftId) continue;
+      // Hai xe nâng cùng làm một xe tải: mỗi xe một bên hông đuôi xe, không chồng lên nhau
+      const sideIndex = Math.max(0, snapshot.forklifts.findIndex((candidate) => candidate.id === forkliftId)) % 2;
+      const oneSide = (end: JobEnd): JobEnd => (end.kind === 'truck' && end.facings.length > 1 ? { ...end, facings: [end.facings[sideIndex]] } : end);
+      from = oneSide(from);
+      to = oneSide(to);
+      load.set(forkliftId, (load.get(forkliftId) ?? 0) + 1);
+      created.push({
+        id: `${pallet.id}:${Date.now()}:${created.length}`,
+        palletId: pallet.id,
+        forkliftId,
+        color: palletColor(pallet),
+        scale: before?.displayed?.pose.scale ?? current.displayed?.pose.scale ?? 1.3,
+        from,
+        to,
+        waitingPose: !chained && from.kind === 'slot' && before?.displayed ? before.displayed.pose : null,
+      });
+    }
+    if (!created.length) return;
+    setJobs((all) => [...all, ...created]);
+    setDriving((all) => new Set([...all, ...created.map((job) => job.forkliftId)]));
+  }, [displayed, snapshot.pallets, snapshot.trucks, snapshot.forklifts, layout]);
+
+  // Chỗ đỗ đổi (xe tải rời dock, bắt đầu / thôi sạc) → xe nâng tự lái tới chỗ mới theo đường vòng, không lướt thẳng
+  const previousHomes = useRef(new Map<string, { x: number; z: number }>());
+  useEffect(() => {
+    const relocated: string[] = [];
+    for (const forklift of snapshot.forklifts) {
+      const home = forkliftHome(forklift, layout, snapshot.trucks);
+      if (!home) continue;
+      const before = previousHomes.current.get(forklift.id);
+      if (before && Math.hypot(home.x - before.x, home.z - before.z) > 2) relocated.push(forklift.id);
+      previousHomes.current.set(forklift.id, home);
+    }
+    if (relocated.length) setDriving((all) => new Set([...all, ...relocated]));
+  }, [snapshot.forklifts, snapshot.trucks, layout]);
+
+  const handlePickup = useCallback((jobId: string) => setPickedUp((all) => new Set(all).add(jobId)), []);
+  const handleDrop = useCallback((jobId: string) => {
+    setJobs((all) => all.filter((job) => job.id !== jobId));
+    setPickedUp((all) => {
+      const next = new Set(all);
+      next.delete(jobId);
+      return next;
+    });
+  }, []);
+  const handleHome = useCallback((forkliftId: string) => {
+    if (jobsRef.current.some((job) => job.forkliftId === forkliftId)) return;
+    setDriving((all) => {
+      const next = new Set(all);
+      next.delete(forkliftId);
+      return next;
+    });
+  }, []);
+  // Pallet có chuyến: chuyến đầu tiên quyết định — chưa xúc thì chờ ở chỗ cũ, đã xúc / trong xe / trong kho thì ẩn
+  const overrides = useMemo(() => {
+    const result = new Map<string, PalletOverride>();
+    for (const job of jobs) {
+      if (result.has(job.palletId)) continue;
+      result.set(job.palletId, !pickedUp.has(job.id) && job.waitingPose ? { mode: 'waiting', pose: job.waitingPose } : { mode: 'hidden' });
+    }
+    return result;
+  }, [jobs, pickedUp]);
+  const jobFor = (forkliftId: string) => jobs.find((job) => job.forkliftId === forkliftId) ?? null;
+
   const stagedPins = useMemo(() => {
     const locs = new Set<string>();
     for (const pallet of snapshot.pallets) {
@@ -469,9 +628,26 @@ export function DynamicLayers({ snapshot, layout, routes, transferTargetFor }: {
         })}
       {ribbon ? <RouteRibbon points={ribbon} /> : null}
       {snapshot.forklifts.map((forklift, forkliftIndex) => (
-        <Forklift key={forklift.id} siteId={siteId} forklift={forklift} layout={layout} trucks={snapshot.trucks} pallets={snapshot.pallets} shipments={snapshot.activeShipments} autoplay={autoplay} index={forkliftIndex} selected={sel('forklift', forklift.id)} hovered={hov('forklift', forklift.id)} />
+        <Forklift
+          key={forklift.id}
+          siteId={siteId}
+          forklift={forklift}
+          layout={layout}
+          trucks={snapshot.trucks}
+          pallets={snapshot.pallets}
+          autoplay={autoplay}
+          index={forkliftIndex}
+          selected={sel('forklift', forklift.id)}
+          hovered={hov('forklift', forklift.id)}
+          driving={driving.has(forklift.id)}
+          job={jobFor(forklift.id)}
+          obstacles={obstacles}
+          onPickup={handlePickup}
+          onDrop={handleDrop}
+          onHome={handleHome}
+        />
       ))}
-      <Pallets siteId={siteId} pallets={snapshot.pallets} layout={layout} selectedId={selection?.type === 'pallet' ? selection.id : null} />
+      <Pallets siteId={siteId} displayed={displayed} overrides={overrides} pallets={snapshot.pallets} selectedId={selection?.type === 'pallet' ? selection.id : null} />
       {stagedPins.map((pinLocation) => (
         <group key={pinLocation.id} position={[pinLocation.x, 2.6, pinLocation.z]}>
           <MapPin />

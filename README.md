@@ -6,6 +6,7 @@ Hệ thống quản lý kho hàng, bãi lưu xe và vận tải nội bộ, có 
 
 | Tài liệu | Nội dung |
 |---|---|
+| [Hướng dẫn sử dụng v1.0](docs/WareTrack_User_Guide_v1.0.md) | Web dùng để làm gì, vai trò nào làm gì, các quy trình thao tác từng bước — đọc trước tiên |
 | [BRD v1.0](docs/WareTrack_BRD_v1.0_2026-10-10.md) | Yêu cầu nghiệp vụ baseline |
 | [Requirements & Architecture](docs/WareTrack_Requirements_Architecture_v1.0.md) | Đặc tả chi tiết, kiến trúc, DB, API, realtime, 3D, roadmap; **[Decision Log](docs/WareTrack_Requirements_Architecture_v1.0.md#28-decision-log)** (mục 28) |
 | [Stack v1.0](docs/WareTrack_Stack_v1.0.md) | Tech stack và quyết định công cụ |
