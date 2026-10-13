@@ -117,4 +117,15 @@ jobs:
           if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::VERCEL_TOKEN chưa cấu hình — bỏ qua deploy"; exit 0; fi
           npx vercel@"$VERCEL_CLI_VERSION" pull --yes --environment=production --token="$VERCEL_TOKEN"
           npx vercel@"$VERCEL_CLI_VERSION" build --prod --token="$VERCEL_TOKEN"
+          # Chặn bản build hỏng trước khi lên production: biến Sensitive của Vercel bị CLI thay bằng "[SENSITIVE]"
+          # và bị đóng thẳng vào bundle — web khi đó gọi API trên chính tên miền Vercel (405 khi đăng nhập)
+          assets=.vercel/output/static/assets
+          if grep -rq '\[SENSITIVE\]' "$assets"; then
+            echo "::error::Bản build chứa [SENSITIVE] — tạo lại VITE_API_BASE_URL / VITE_WS_URL trên Vercel với công tắc Sensitive TẮT"
+            exit 1
+          fi
+          if ! grep -rqE 'https://[^"]+/api/v1' "$assets"; then
+            echo "::error::Bản build không chứa địa chỉ API (VITE_API_BASE_URL dạng https://…/api/v1) — kiểm tra biến môi trường Production trên Vercel"
+            exit 1
+          fi
           npx vercel@"$VERCEL_CLI_VERSION" deploy --prebuilt --prod --token="$VERCEL_TOKEN"
