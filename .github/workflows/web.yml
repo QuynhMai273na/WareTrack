@@ -98,6 +98,8 @@ jobs:
     timeout-minutes: 20
     environment: web-production
     env:
+      # Vercel CLI 39 không nhận Node.js 24.x của project ("invalid Node.js Version"); ghim bản mới cụ thể để build lặp lại được
+      VERCEL_CLI_VERSION: 61.1.0
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -113,6 +115,6 @@ jobs:
       - name: Deploy to Vercel (production)
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then echo "::warning::VERCEL_TOKEN chưa cấu hình — bỏ qua deploy"; exit 0; fi
-          npx vercel@39 pull --yes --environment=production --token="$VERCEL_TOKEN"
-          npx vercel@39 build --prod --token="$VERCEL_TOKEN"
-          npx vercel@39 deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          npx vercel@"$VERCEL_CLI_VERSION" pull --yes --environment=production --token="$VERCEL_TOKEN"
+          npx vercel@"$VERCEL_CLI_VERSION" build --prod --token="$VERCEL_TOKEN"
+          npx vercel@"$VERCEL_CLI_VERSION" deploy --prebuilt --prod --token="$VERCEL_TOKEN"
