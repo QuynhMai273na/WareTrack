@@ -2011,7 +2011,7 @@ flowchart TB
 
 **Biến môi trường API trên Render:** `DATABASE_URL` (chuỗi kết nối trực tiếp của Neon), `WEB_ORIGIN` (origin Vercel), `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` (ES256, sinh bằng `node apps/api/scripts/gen-jwt-keys.mjs`), `COOKIE_SAMESITE=none`, `COOKIE_SECURE=true`, `SEED_ON_EMPTY=true`. **Web trên Vercel:** Root Directory `apps/web` (cấu hình build ở `apps/web/vercel.json`), `VITE_API_BASE_URL=https://<api>.onrender.com/api/v1`, `VITE_WS_URL=https://<api>.onrender.com`.
 
-**CI/CD:** `.github/workflows/api.yml` — typecheck, unit test, build, migrate trên PostgreSQL service, smoke test API thật (`pnpm test:smoke`), build Docker image; trên `main` gọi `RENDER_DEPLOY_HOOK_URL` (Render `autoDeploy: false`). `.github/workflows/web.yml` — typecheck, test, build, e2e Playwright (API + DB thật, dữ liệu seed); trên `main` deploy bằng Vercel CLI (`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`). Thiếu secret thì bước deploy chỉ cảnh báo và bỏ qua.
+**CI/CD:** `.github/workflows/api.yml` — typecheck, unit test, build, migrate trên PostgreSQL service, smoke test API thật (`pnpm test:smoke`); job `image` build image một lần, chạy thử container (migrate, seed, đăng nhập), Trivy chặn HIGH/CRITICAL có bản vá, trên `main` đẩy `ghcr.io/quynhmai273na/waretrack-api` kèm SBOM/provenance, attestation và ký cosign; job `deploy` (environment `api-production`, cần duyệt) kiểm tra chữ ký + provenance rồi gọi `RENDER_DEPLOY_HOOK_URL` kèm `imgURL` = digest (DEC-68). `.github/workflows/web.yml` — typecheck, test, build, e2e Playwright (API + DB thật, dữ liệu seed); trên `main` deploy bằng Vercel CLI (`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`). Thiếu secret thì bước deploy chỉ cảnh báo và bỏ qua.
 
 **Hạn chế gói miễn phí:** instance free của Render ngủ sau ~15 phút không có request (lần gọi đầu mất khoảng 1 phút; realtime ngắt trong lúc ngủ và client tự resync khi API dậy); database Neon free dung lượng nhỏ (~0,5 GB) và tự ngủ khi không dùng, không hết hạn. Chấp nhận cho demo; nâng plan hoặc chuyển hạ tầng khi dùng thật (Q-23).
 
@@ -5049,7 +5049,7 @@ Cột API dùng số thứ tự endpoint ở mục 16.4; cột Test dùng mã UC
 
 ## 28. Decision Log
 
-**Ngày phê duyệt:** 10/10/2026 · **Người phê duyệt:** Chủ dự án (Product Owner) · **Phạm vi:** toàn bộ 50 đề xuất (DEC-01…DEC-50) được chốt theo phương án đề xuất; DEC-51…DEC-57 ghi nhận thông tin bổ sung do chủ dự án cung cấp cùng ngày; DEC-58 chốt nơi chạy API demo (đóng Q-21); DEC-59…DEC-67 (10–13/10/2026) là yêu cầu bổ sung của chủ dự án trong quá trình triển khai (mục 28.9).
+**Ngày phê duyệt:** 10/10/2026 · **Người phê duyệt:** Chủ dự án (Product Owner) · **Phạm vi:** toàn bộ 50 đề xuất (DEC-01…DEC-50) được chốt theo phương án đề xuất; DEC-51…DEC-57 ghi nhận thông tin bổ sung do chủ dự án cung cấp cùng ngày; DEC-58 chốt nơi chạy API demo (đóng Q-21); DEC-59…DEC-68 (10–13/10/2026) là yêu cầu bổ sung của chủ dự án trong quá trình triển khai (mục 28.9).
 
 BRD v1.0 **không** bị sửa: các quyết định dưới đây là chi tiết hóa trong phạm vi baseline (BRD mục 12 nêu đây là thông số xác định ở solution design). Thay đổi về sau theo quy trình change request (BRD mục 13) và ghi thêm dòng vào bảng này.
 
@@ -5171,6 +5171,7 @@ Các điểm dưới đây là lựa chọn của đội phát triển khi hiệ
 | DEC-64 | **Trang quản trị danh mục** | User & phân quyền (tạo, gán/thu hồi vai trò theo site, khóa, đặt lại mật khẩu — thu hồi mọi phiên), SKU (thêm nhóm hàng), đối tác (khách hàng/nhà cung cấp/hãng vận tải), xe tải, tài xế, xe nâng theo site (trạm sạc + người lái); quyền theo ma trận 10.2 hiện có |
 | DEC-65 | **Nhập tồn kho đầu kỳ** từ CSV | `POST /sites/{id}/inventory/opening-stock` (`dryRun` kiểm tra trước); mỗi dòng một pallet, ghi sổ cái `RECEIPT` tham chiếu `OPENING_STOCK`; tất cả hoặc không; quyền mới `inventory.opening.import` (Admin, Site Manager, Inventory Controller) |
 | DEC-66 | **In nhãn QR** cho vị trí và pallet | Trang Labels: nhãn vị trí mã hóa `qrValue` (`WT:LOC:{site}:{code}`), nhãn pallet mã hóa mã pallet — đúng giá trị các màn hình quét đang chờ; in A4 từ trình duyệt |
+| DEC-68 | **API deploy bằng image đã ký** | Dockerfile 2 tầng (runtime chỉ có dependency production, không npm/pnpm, user thường; Trivy 77 → 0 lỗ hổng HIGH/CRITICAL có bản vá). CI build image một lần → chạy thử (migrate, seed, đăng nhập) → Trivy chặn → đẩy GHCR kèm SBOM + provenance → attestation + cosign keyless; job deploy kiểm tra chữ ký (đúng `api.yml` trên `main`) và provenance rồi gọi deploy hook Render kèm digest. Render service kiểu Existing Image (`waretrack-api-image`) |
 | DEC-67 | **PostgreSQL demo chuyển sang Neon** (thay Render PostgreSQL trong DEC-58) | Render Postgres free hết hạn sau 30 ngày; Neon free không hết hạn. Database và API cùng vùng Singapore; `render.yaml` bỏ `databases`, `DATABASE_URL` thành secret (chuỗi kết nối trực tiếp — Prisma migrate không chạy qua pooler) |
 
 ---

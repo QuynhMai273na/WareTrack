@@ -66,7 +66,7 @@ Quy trình đưa một kho thật vào hệ thống (đăng nhập bằng admin 
 
 ## Deploy demo (DEC-52, DEC-58, DEC-67 — chi tiết mục 12.7)
 
-**API → Render.** Render Dashboard → New → Blueprint → chọn repo; [`render.yaml`](render.yaml) tạo web service Docker ([`apps/api/Dockerfile`](apps/api/Dockerfile)) ở vùng Singapore. PostgreSQL 16 đặt trên **Neon** (DEC-67): tạo project vùng Singapore, tắt *Connection pooling*, copy chuỗi kết nối trực tiếp. Nhập các secret:
+**API → Render.** Render Dashboard → New → Blueprint → chọn repo; [`render.yaml`](render.yaml) tạo web service chạy **image đã ký** `ghcr.io/quynhmai273na/waretrack-api` (DEC-68) ở vùng Singapore: CI build image từ [`apps/api/Dockerfile`](apps/api/Dockerfile) một lần, chạy thử, quét Trivy, ký cosign + attestation, rồi Render deploy đúng digest đó sau khi bạn duyệt. Package GHCR để Public. PostgreSQL 16 đặt trên **Neon** (DEC-67): tạo project vùng Singapore, tắt *Connection pooling*, copy chuỗi kết nối trực tiếp. Nhập các secret:
 
 - `DATABASE_URL`: chuỗi kết nối trực tiếp của Neon (có `?sslmode=require`)
 - `WEB_ORIGIN`: URL web trên Vercel (ví dụ `https://waretrack.vercel.app`)

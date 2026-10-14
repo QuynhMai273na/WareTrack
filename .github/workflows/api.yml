@@ -70,20 +70,163 @@ jobs:
           pnpm test:smoke
       - if: failure()
         run: cat apps/api/api.log || true
-      - name: Docker image builds
-        run: docker build -f apps/api/Dockerfile -t waretrack-api:ci .
+
+  # Build image MỘT lần → chạy thử chính image đó → Trivy (chặn) → trên main: đẩy GHCR, ghi provenance, ký cosign.
+  # Render deploy đúng digest này (job deploy) — thứ chạy production là thứ đã được test, quét và ký.
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # đẩy image lên GHCR (chỉ trên main)
+      id-token: write # cosign keyless + attestation (chỉ trên main)
+      attestations: write
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: waretrack
+          POSTGRES_PASSWORD: waretrack
+          POSTGRES_DB: waretrack
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U waretrack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      IMAGE_NAME: ghcr.io/quynhmai273na/waretrack-api
+      # PR (kể cả Dependabot) chỉ build + chạy thử + quét, không đẩy và không ký
+      PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build (and push on main)
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          tags: ${{ env.PUBLISH == 'true' && steps.meta.outputs.tags || 'waretrack-api:ci' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: ${{ env.PUBLISH == 'true' }}
+          load: ${{ env.PUBLISH != 'true' }}
+          # SBOM + provenance chỉ đi kèm image đẩy lên registry (image load vào docker local không giữ được)
+          sbom: ${{ env.PUBLISH == 'true' }}
+          provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image reference
+        id: ref
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [ "$PUBLISH" = "true" ]; then
+            echo "image=${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=waretrack-api:ci" >> "$GITHUB_OUTPUT"
+          fi
+      # Image không khởi động được (migrate, seed, đăng nhập) thì dừng ở đây — không bao giờ được ký
+      - name: Smoke test the image
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          node apps/api/scripts/gen-jwt-keys.mjs > smoke.env
+          {
+            echo "DATABASE_URL=postgresql://waretrack:waretrack@localhost:5432/waretrack?schema=public"
+            echo "SEED_ON_EMPTY=true"
+            echo "WEB_ORIGIN=http://localhost:5173"
+          } >> smoke.env
+          docker run -d --name smoke --network host --env-file smoke.env "$IMAGE"
+          for attempt in $(seq 1 90); do curl -sf http://localhost:3000/api/v1/health/ready > /dev/null && break; sleep 2; done
+          curl -fsS http://localhost:3000/api/v1/health/ready || { docker logs smoke; exit 1; }
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
+            -d '{"username":"manager","password":"WareTrack@2026"}' http://localhost:3000/api/v1/auth/login)
+          [ "$status" = "200" ] || { echo "::error::login returned HTTP $status"; docker logs smoke; exit 1; }
+          echo "image boots, migrates, seeds and accepts a login"
+          docker rm -f smoke
+          rm -f smoke.env
+      # Chặn lỗ hổng HIGH/CRITICAL đã có bản vá trong image (runtime 2 tầng: chỉ dependency production)
+      - name: Scan image (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.ref.outputs.image }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Attest build provenance
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Install cosign
+        if: env.PUBLISH == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign image (keyless, by digest)
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: cosign sign --yes "$IMAGE"
 
   deploy:
-    needs: test
+    needs: image
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: api-production
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    env:
+      IMAGE: ${{ needs.image.outputs.image }}
     steps:
-      # Render build lại từ Dockerfile của commit này (render.yaml: autoDeploy false)
-      - name: Trigger Render deploy hook
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # Cổng deploy: chỉ image do CHÍNH workflow này ký trên main, có provenance trỏ về repo này, mới được chạy
+      - name: Verify signature and provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$IMAGE" in *@sha256:*) ;; *) echo "::error::refusing to deploy a tag: $IMAGE"; exit 1 ;; esac
+          cosign verify "$IMAGE" \
+            --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/api.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          gh attestation verify "oci://${IMAGE}" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/api.yml"
+          echo "verified: $IMAGE"
+      # Render chạy đúng image đã ký (service kiểu "Existing Image" trong render.yaml; autoDeploy false)
+      - name: Trigger Render deploy of this digest
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then echo "::warning::RENDER_DEPLOY_HOOK_URL chưa cấu hình — bỏ qua deploy"; exit 0; fi
-          curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
+          curl -fsS --get --data-urlencode "imgURL=${IMAGE}" "$RENDER_DEPLOY_HOOK_URL" > /dev/null
+          echo "Render deploy requested for $IMAGE"
